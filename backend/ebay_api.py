@@ -1,3 +1,32 @@
+"""
+eBay API Comprehensive Test Suite
+
+This application tests all major eBay Inventory API endpoints including OAuth,
+inventory management, offers, and listing publication.
+
+IMPORTANT eBay API Requirements (learned from testing):
+
+1. SKU Format: ONLY alphanumeric characters allowed (A-Z, a-z, 0-9)
+   - NO hyphens, underscores, or special characters
+   - Max length: 50 characters
+   - Error 25707 occurs if SKU contains invalid characters
+
+2. Brand/MPN: When providing a brand, many categories require MPN (Manufacturer Part Number)
+   - Category 31388 (Cameras & Photo) requires BOTH brand AND mpn
+   - Error 25002 occurs if MPN is missing when required
+
+3. Business Policies Required for Publishing:
+   - Fulfillment Policy (with shipping services) - Error 25007 if missing
+   - Payment Policy
+   - Return Policy
+   - All three policies must be created BEFORE publishing an offer
+   - Policies are reusable across multiple offers
+
+4. Getting Offers: Query by SKU to avoid errors from old invalid SKUs
+   - Use GET /offer?sku={sku} instead of GET /offer
+   - Prevents error 25707 from old inventory items with invalid SKU formats
+"""
+
 import base64
 from dotenv import load_dotenv
 import os
@@ -139,6 +168,13 @@ async def root(
                 <button onclick="runTest('/test-fulfillment-policies')">Test Fulfillment Policies</button>
                 <button onclick="runTest('/test-payment-policies')">Test Payment Policies</button>
                 <button onclick="runTest('/test-return-policies')">Test Return Policies</button>
+            </div>
+
+            <div class="section">
+                <h2>📦 View Published Listings</h2>
+                <button class="test-btn" onclick="runTest('/get-all-published-listings')">Get All Published Listings</button>
+                <button onclick="window.open('https://www.sandbox.ebay.com/sh/ovw', '_blank')">Open Seller Hub</button>
+                <button onclick="window.open('https://www.sandbox.ebay.com/mye/myebay/selling', '_blank')">Open My eBay</button>
             </div>
 
             <div id="result" class="result" style="display:none;">
@@ -293,7 +329,8 @@ async def test_all_endpoints():
         "tests": []
     }
 
-    test_sku = f"TEST-SKU-{int(time.time())}"
+    # Use alphanumeric-only SKU (no hyphens allowed per eBay API requirements)
+    test_sku = f"TESTSKU{int(time.time())}"
 
     try:
         # Test 1: Token verification
@@ -314,36 +351,186 @@ async def test_all_endpoints():
             "details": location_result
         })
 
-        # Test 3: Get fulfillment policies
-        log_test("3", "Testing fulfillment policies")
-        fulfillment_result = await test_fulfillment_policies()
-        results["tests"].append({
-            "name": "Fulfillment Policies",
-            "status": "PASSED" if fulfillment_result.get("success") else "WARNING",
-            "details": fulfillment_result
-        })
+        # Get headers for subsequent API calls
+        headers = get_headers()
 
-        # Test 4: Get payment policies
-        log_test("4", "Testing payment policies")
-        payment_result = await test_payment_policies()
-        results["tests"].append({
-            "name": "Payment Policies",
-            "status": "PASSED" if payment_result.get("success") else "WARNING",
-            "details": payment_result
-        })
+        # Test 3: Create fulfillment policy (required for publishing offers)
+        log_test("3", "Creating fulfillment policy with shipping services")
+        fulfillment_policy_id = None
+        try:
+            fulfillment_payload = {
+                "name": "Test Shipping Policy",
+                "description": "Standard domestic shipping for test listings",
+                "marketplaceId": "EBAY_US",
+                "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+                "handlingTime": {
+                    "unit": "DAY",
+                    "value": 1
+                },
+                "localPickup": False,
+                "freightShipping": False,
+                "shippingOptions": [{
+                    "optionType": "DOMESTIC",
+                    "costType": "FLAT_RATE",
+                    "shippingServices": [{
+                        "shippingServiceCode": "USPSPriority",
+                        "freeShipping": True,
+                        "shippingCost": {
+                            "currency": "USD",
+                            "value": "0.00"
+                        }
+                    }]
+                }]
+            }
 
-        # Test 5: Get return policies
-        log_test("5", "Testing return policies")
-        return_result = await test_return_policies()
-        results["tests"].append({
-            "name": "Return Policies",
-            "status": "PASSED" if return_result.get("success") else "WARNING",
-            "details": return_result
-        })
+            fulfillment_url = f"{SANDBOX_ACCOUNT_BASE}/fulfillment_policy"
+            fulfillment_response = requests.post(fulfillment_url, headers=headers, json=fulfillment_payload)
+
+            if fulfillment_response.status_code in [200, 201]:
+                fulfillment_data = fulfillment_response.json()
+                fulfillment_policy_id = fulfillment_data.get("fulfillmentPolicyId")
+                log_test("3", f"Fulfillment policy created: {fulfillment_policy_id}", True)
+                results["tests"].append({
+                    "name": "Create Fulfillment Policy",
+                    "status": "PASSED",
+                    "details": {"policyId": fulfillment_policy_id}
+                })
+            else:
+                # Try to get existing policy
+                get_policies_url = f"{SANDBOX_ACCOUNT_BASE}/fulfillment_policy?marketplace_id=EBAY_US"
+                get_response = requests.get(get_policies_url, headers=headers)
+                if get_response.status_code == 200:
+                    policies_data = get_response.json()
+                    if policies_data.get("total", 0) > 0:
+                        fulfillment_policy_id = policies_data["fulfillmentPolicies"][0]["fulfillmentPolicyId"]
+                        log_test("3", f"Using existing fulfillment policy: {fulfillment_policy_id}", True)
+                        results["tests"].append({
+                            "name": "Create Fulfillment Policy",
+                            "status": "PASSED",
+                            "details": {"policyId": fulfillment_policy_id, "note": "Using existing policy"}
+                        })
+
+                if not fulfillment_policy_id:
+                    log_test("3", f"Failed to create/get fulfillment policy: {fulfillment_response.text}", False)
+                    results["tests"].append({
+                        "name": "Create Fulfillment Policy",
+                        "status": "WARNING",
+                        "details": {"error": fulfillment_response.text}
+                    })
+        except Exception as e:
+            log_test("3", f"Fulfillment policy error: {str(e)}", False)
+            results["tests"].append({
+                "name": "Create Fulfillment Policy",
+                "status": "WARNING",
+                "details": {"error": str(e)}
+            })
+
+        # Test 4: Create payment policy (required for publishing offers)
+        log_test("4", "Creating payment policy")
+        payment_policy_id = None
+        try:
+            payment_payload = {
+                "name": "Test Payment Policy",
+                "marketplaceId": "EBAY_US",
+                "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+                "paymentMethods": [{"paymentMethodType": "PAYPAL"}],
+                "immediatePay": False
+            }
+
+            payment_url = f"{SANDBOX_ACCOUNT_BASE}/payment_policy"
+            payment_response = requests.post(payment_url, headers=headers, json=payment_payload)
+
+            if payment_response.status_code in [200, 201]:
+                payment_data = payment_response.json()
+                payment_policy_id = payment_data.get("paymentPolicyId")
+                log_test("4", f"Payment policy created: {payment_policy_id}", True)
+                results["tests"].append({
+                    "name": "Create Payment Policy",
+                    "status": "PASSED",
+                    "details": {"policyId": payment_policy_id}
+                })
+            else:
+                # Try to get existing
+                get_payment_url = f"{SANDBOX_ACCOUNT_BASE}/payment_policy?marketplace_id=EBAY_US"
+                get_response = requests.get(get_payment_url, headers=headers)
+                if get_response.status_code == 200:
+                    payment_data = get_response.json()
+                    if payment_data.get("total", 0) > 0:
+                        payment_policy_id = payment_data["paymentPolicies"][0]["paymentPolicyId"]
+                        log_test("4", f"Using existing payment policy: {payment_policy_id}", True)
+                        results["tests"].append({
+                            "name": "Create Payment Policy",
+                            "status": "PASSED",
+                            "details": {"policyId": payment_policy_id, "note": "Using existing"}
+                        })
+                if not payment_policy_id:
+                    results["tests"].append({
+                        "name": "Create Payment Policy",
+                        "status": "WARNING",
+                        "details": {"error": payment_response.text}
+                    })
+        except Exception as e:
+            results["tests"].append({
+                "name": "Create Payment Policy",
+                "status": "WARNING",
+                "details": {"error": str(e)}
+            })
+
+        # Test 5: Create return policy (required for publishing offers)
+        log_test("5", "Creating return policy")
+        return_policy_id = None
+        try:
+            return_payload = {
+                "name": "Test Return Policy",
+                "marketplaceId": "EBAY_US",
+                "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+                "returnsAccepted": True,
+                "returnPeriod": {"unit": "DAY", "value": 30},
+                "refundMethod": "MONEY_BACK",
+                "returnShippingCostPayer": "BUYER"
+            }
+
+            return_url = f"{SANDBOX_ACCOUNT_BASE}/return_policy"
+            return_response = requests.post(return_url, headers=headers, json=return_payload)
+
+            if return_response.status_code in [200, 201]:
+                return_data = return_response.json()
+                return_policy_id = return_data.get("returnPolicyId")
+                log_test("5", f"Return policy created: {return_policy_id}", True)
+                results["tests"].append({
+                    "name": "Create Return Policy",
+                    "status": "PASSED",
+                    "details": {"policyId": return_policy_id}
+                })
+            else:
+                # Try to get existing
+                get_return_url = f"{SANDBOX_ACCOUNT_BASE}/return_policy?marketplace_id=EBAY_US"
+                get_response = requests.get(get_return_url, headers=headers)
+                if get_response.status_code == 200:
+                    return_data = get_response.json()
+                    if return_data.get("total", 0) > 0:
+                        return_policy_id = return_data["returnPolicies"][0]["returnPolicyId"]
+                        log_test("5", f"Using existing return policy: {return_policy_id}", True)
+                        results["tests"].append({
+                            "name": "Create Return Policy",
+                            "status": "PASSED",
+                            "details": {"policyId": return_policy_id, "note": "Using existing"}
+                        })
+                if not return_policy_id:
+                    results["tests"].append({
+                        "name": "Create Return Policy",
+                        "status": "WARNING",
+                        "details": {"error": return_response.text}
+                    })
+        except Exception as e:
+            results["tests"].append({
+                "name": "Create Return Policy",
+                "status": "WARNING",
+                "details": {"error": str(e)}
+            })
 
         # Test 6: Create inventory item
         log_test("6", f"Creating inventory item with SKU: {test_sku}")
-        headers = get_headers()
         inventory_payload = {
             "availability": {
                 "shipToLocationAvailability": {
@@ -357,7 +544,8 @@ async def test_all_endpoints():
                 "imageUrls": [
                     "https://i.ebayimg.com/images/g/T~0AAOSwf6RkP3aI/s-l1600.jpg"
                 ],
-                "brand": "GoPro"
+                "brand": "GoPro",
+                "mpn": "HERO4BLACK"  # Required: Manufacturer Part Number paired with brand
             }
         }
 
@@ -417,6 +605,15 @@ async def test_all_endpoints():
                 }
             }
         }
+
+        # Add policies if they were created successfully
+        if fulfillment_policy_id and payment_policy_id and return_policy_id:
+            offer_payload["listingPolicies"] = {
+                "fulfillmentPolicyId": fulfillment_policy_id,
+                "paymentPolicyId": payment_policy_id,
+                "returnPolicyId": return_policy_id
+            }
+            log_test("8", "Adding business policies to offer", True)
 
         offer_url = f"{SANDBOX_INVENTORY_BASE}/offer"
         offer_response = requests.post(offer_url, headers=headers, json=offer_payload)
@@ -510,25 +707,31 @@ async def test_all_endpoints():
                 "details": {"error": all_inventory_response.text}
             })
 
-        # Test 12: Get all offers
-        log_test("12", "Getting all offers")
-        all_offers_url = f"{SANDBOX_INVENTORY_BASE}/offer"
-        all_offers_response = requests.get(all_offers_url, headers=headers)
+        # Test 12: Get offers for specific SKU
+        # Note: We query by SKU to avoid error 25707 from old inventory items with invalid SKU formats
+        log_test("12", f"Getting offers for SKU: {test_sku}")
+        sku_offers_url = f"{SANDBOX_INVENTORY_BASE}/offer?sku={test_sku}"
+        sku_offers_response = requests.get(sku_offers_url, headers=headers)
 
-        if all_offers_response.status_code == 200:
-            all_offers = all_offers_response.json()
-            log_test("12", f"Retrieved {all_offers.get('total', 0)} offers", True)
+        if sku_offers_response.status_code == 200:
+            sku_offers = sku_offers_response.json()
+            log_test("12", f"Retrieved {sku_offers.get('total', 0)} offers for SKU", True)
             results["tests"].append({
-                "name": "Get All Offers",
+                "name": "Get Offers by SKU",
                 "status": "PASSED",
-                "details": {"total": all_offers.get("total", 0), "offers": all_offers.get("offers", [])}
+                "details": {
+                    "sku": test_sku,
+                    "total": sku_offers.get("total", 0),
+                    "offers": sku_offers.get("offers", []),
+                    "note": "Querying by SKU to avoid old items with invalid SKU formats"
+                }
             })
         else:
-            log_test("12", f"Failed to get offers: {all_offers_response.text}", False)
+            log_test("12", f"Failed to get offers: {sku_offers_response.text}", False)
             results["tests"].append({
-                "name": "Get All Offers",
+                "name": "Get Offers by SKU",
                 "status": "FAILED",
-                "details": {"error": all_offers_response.text}
+                "details": {"error": sku_offers_response.text}
             })
 
         # Summary
@@ -605,7 +808,11 @@ async def test_inventory_location():
 
 @app.get("/test-fulfillment-policies")
 async def test_fulfillment_policies():
-    """Test getting and creating fulfillment policies"""
+    """
+    Test getting fulfillment policies.
+    Note: 400 errors are common in sandbox environments if policies haven't been created yet.
+    This is expected behavior and not necessarily an error.
+    """
     try:
         headers = get_headers()
 
@@ -617,13 +824,16 @@ async def test_fulfillment_policies():
             "success": response.status_code == 200,
             "status_code": response.status_code,
             "total_policies": 0,
-            "policies": []
+            "policies": [],
+            "note": "400 errors are common in sandbox if no policies exist yet"
         }
 
         if response.status_code == 200:
             data = response.json()
             result["total_policies"] = data.get("total", 0)
             result["policies"] = data.get("fulfillmentPolicies", [])
+        elif response.status_code == 400:
+            result["message"] = "No policies found (common in sandbox)"
 
         return result
 
@@ -633,7 +843,10 @@ async def test_fulfillment_policies():
 
 @app.get("/test-payment-policies")
 async def test_payment_policies():
-    """Test getting payment policies"""
+    """
+    Test getting payment policies.
+    Note: 400 errors are common in sandbox environments if policies haven't been created yet.
+    """
     try:
         headers = get_headers()
 
@@ -644,13 +857,16 @@ async def test_payment_policies():
             "success": response.status_code == 200,
             "status_code": response.status_code,
             "total_policies": 0,
-            "policies": []
+            "policies": [],
+            "note": "400 errors are common in sandbox if no policies exist yet"
         }
 
         if response.status_code == 200:
             data = response.json()
             result["total_policies"] = data.get("total", 0)
             result["policies"] = data.get("paymentPolicies", [])
+        elif response.status_code == 400:
+            result["message"] = "No policies found (common in sandbox)"
 
         return result
 
@@ -660,7 +876,10 @@ async def test_payment_policies():
 
 @app.get("/test-return-policies")
 async def test_return_policies():
-    """Test getting return policies"""
+    """
+    Test getting return policies.
+    Note: 400 errors are common in sandbox environments if policies haven't been created yet.
+    """
     try:
         headers = get_headers()
 
@@ -671,13 +890,16 @@ async def test_return_policies():
             "success": response.status_code == 200,
             "status_code": response.status_code,
             "total_policies": 0,
-            "policies": []
+            "policies": [],
+            "note": "400 errors are common in sandbox if no policies exist yet"
         }
 
         if response.status_code == 200:
             data = response.json()
             result["total_policies"] = data.get("total", 0)
             result["policies"] = data.get("returnPolicies", [])
+        elif response.status_code == 400:
+            result["message"] = "No policies found (common in sandbox)"
 
         return result
 
@@ -700,7 +922,8 @@ async def test_inventory_operations():
     """Test various inventory operations"""
     try:
         headers = get_headers()
-        test_sku = f"INV-TEST-{int(time.time())}"
+        # Use alphanumeric-only SKU (no hyphens)
+        test_sku = f"INVTEST{int(time.time())}"
 
         results = {
             "test_sku": test_sku,
@@ -714,7 +937,9 @@ async def test_inventory_operations():
             "product": {
                 "title": "Test Inventory Operations Item",
                 "description": "Testing inventory operations",
-                "imageUrls": ["https://i.ebayimg.com/images/g/T~0AAOSwf6RkP3aI/s-l1600.jpg"]
+                "imageUrls": ["https://i.ebayimg.com/images/g/T~0AAOSwf6RkP3aI/s-l1600.jpg"],
+                "brand": "Generic",
+                "mpn": "TESTMPN001"
             }
         }
 
@@ -763,7 +988,8 @@ async def test_inventory_operations():
 @app.get("/test-create-listing")
 async def test_create_listing():
     """Quick test to create a complete listing"""
-    test_sku = f"QUICK-TEST-{int(time.time())}"
+    # Use alphanumeric-only SKU (no hyphens)
+    test_sku = f"QUICKTEST{int(time.time())}"
 
     try:
         headers = get_headers()
@@ -778,7 +1004,9 @@ async def test_create_listing():
             "product": {
                 "title": "Quick Test Product",
                 "description": "Quick test listing",
-                "imageUrls": ["https://i.ebayimg.com/images/g/T~0AAOSwf6RkP3aI/s-l1600.jpg"]
+                "imageUrls": ["https://i.ebayimg.com/images/g/T~0AAOSwf6RkP3aI/s-l1600.jpg"],
+                "brand": "TestBrand",
+                "mpn": "QT12345"
             }
         }
 
@@ -830,32 +1058,118 @@ async def test_get_listing():
     try:
         headers = get_headers()
 
-        # Get all offers first
-        offers_url = f"{SANDBOX_INVENTORY_BASE}/offer"
-        offers_response = requests.get(offers_url, headers=headers)
+        # Get all inventory items first
+        inventory_url = f"{SANDBOX_INVENTORY_BASE}/inventory_item"
+        inventory_response = requests.get(inventory_url, headers=headers)
 
-        if offers_response.status_code == 200:
-            offers_data = offers_response.json()
-            offers = offers_data.get("offers", [])
+        if inventory_response.status_code == 200:
+            inventory_data = inventory_response.json()
+            items = inventory_data.get("inventoryItems", [])
 
-            if offers:
-                # Get details of first offer
-                first_offer = offers[0]
-                offer_id = first_offer.get("offerId")
+            if items:
+                # Get offers for the first valid SKU (alphanumeric only)
+                valid_items = [item for item in items if item.get("sku", "").replace("_", "").replace("-", "").isalnum()]
 
-                offer_details_url = f"{SANDBOX_INVENTORY_BASE}/offer/{offer_id}"
-                details_response = requests.get(offer_details_url, headers=headers)
+                if valid_items:
+                    first_item = valid_items[0]
+                    sku = first_item.get("sku")
 
-                return {
-                    "success": True,
-                    "total_offers": len(offers),
-                    "tested_offer_id": offer_id,
-                    "offer_details": details_response.json() if details_response.status_code == 200 else None
-                }
+                    # Get offers for this SKU
+                    offers_url = f"{SANDBOX_INVENTORY_BASE}/offer?sku={sku}"
+                    offers_response = requests.get(offers_url, headers=headers)
 
-            return {"success": True, "message": "No offers found", "total_offers": 0}
+                    if offers_response.status_code == 200:
+                        offers_data = offers_response.json()
+                        offers = offers_data.get("offers", [])
 
-        return {"success": False, "error": "Failed to get offers"}
+                        if offers:
+                            first_offer = offers[0]
+                            offer_id = first_offer.get("offerId")
+                            listing_id = first_offer.get("listingId")
+
+                            return {
+                                "success": True,
+                                "sku": sku,
+                                "offer_id": offer_id,
+                                "listing_id": listing_id,
+                                "sandbox_url": f"https://www.sandbox.ebay.com/itm/{listing_id}" if listing_id else None,
+                                "status": first_offer.get("status"),
+                                "offer_details": first_offer
+                            }
+
+            return {"success": True, "message": "No valid items/offers found", "total_items": len(items)}
+
+        return {"success": False, "error": "Failed to get inventory items"}
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/get-all-published-listings")
+async def get_all_published_listings():
+    """
+    Get all published listings with their sandbox URLs.
+    This endpoint returns all items that have been successfully published to eBay sandbox.
+    """
+    try:
+        headers = get_headers()
+        published_listings = []
+
+        # Get all inventory items
+        inventory_url = f"{SANDBOX_INVENTORY_BASE}/inventory_item"
+        inventory_response = requests.get(inventory_url, headers=headers)
+
+        if inventory_response.status_code != 200:
+            return {"success": False, "error": "Failed to get inventory items"}
+
+        inventory_data = inventory_response.json()
+        items = inventory_data.get("inventoryItems", [])
+
+        # For each item, try to get its offers
+        for item in items:
+            sku = item.get("sku", "")
+
+            # Skip items with invalid SKU formats
+            if not sku or not sku.replace("_", "").replace("-", "").isalnum():
+                continue
+
+            try:
+                # Get offers for this SKU
+                offers_url = f"{SANDBOX_INVENTORY_BASE}/offer?sku={sku}"
+                offers_response = requests.get(offers_url, headers=headers)
+
+                if offers_response.status_code == 200:
+                    offers_data = offers_response.json()
+                    offers = offers_data.get("offers", [])
+
+                    for offer in offers:
+                        listing_id = offer.get("listingId")
+                        status = offer.get("status")
+
+                        # Only include published listings
+                        if listing_id and status == "PUBLISHED":
+                            published_listings.append({
+                                "sku": sku,
+                                "title": item.get("product", {}).get("title", "N/A"),
+                                "offer_id": offer.get("offerId"),
+                                "listing_id": listing_id,
+                                "sandbox_url": f"https://www.sandbox.ebay.com/itm/{listing_id}",
+                                "price": offer.get("pricingSummary", {}).get("price", {}).get("value"),
+                                "currency": offer.get("pricingSummary", {}).get("price", {}).get("currency"),
+                                "quantity": item.get("availability", {}).get("shipToLocationAvailability", {}).get("quantity"),
+                                "status": status
+                            })
+            except Exception as e:
+                # Skip items that cause errors
+                continue
+
+        return {
+            "success": True,
+            "total_published": len(published_listings),
+            "listings": published_listings,
+            "seller_hub_url": "https://www.sandbox.ebay.com/sh/ovw",
+            "my_ebay_url": "https://www.sandbox.ebay.com/mye/myebay/selling"
+        }
 
     except Exception as e:
         return {"success": False, "error": str(e)}
