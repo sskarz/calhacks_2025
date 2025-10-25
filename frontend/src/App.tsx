@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { clsx } from "clsx";
 import {
   STOREFRONTS,
@@ -8,18 +8,16 @@ import {
 } from "./lib/storefronts";
 import { formatCurrency, formatRelativeDate, generateId } from "./lib/utils";
 import type { ListingItem, ListingStatus } from "./lib/types";
+import {api, wsManager} from "./lib/api";
 
 interface FormState {
   title: string;
   description: string;
   price: string;
-  status: ListingStatus;
-  platform: StorefrontId;
+  status: "listed" | "sold" | "pending";
+  platform: "ebay" | "etsy" | "shopify" | "amazon";
   quantity: number;
-  imageFile?: File;
-  imagePreview?: string;
-  sku: string;
-  tags: string;
+  imagePreview: string | null;
 }
 
 const DEFAULT_FORM: FormState = {
@@ -29,8 +27,7 @@ const DEFAULT_FORM: FormState = {
   status: "listed",
   platform: "ebay",
   quantity: 1,
-  sku: "",
-  tags: ""
+  imagePreview: null
 };
 
 const SAMPLE_ITEMS: ListingItem[] = [
@@ -45,9 +42,7 @@ const SAMPLE_ITEMS: ListingItem[] = [
     createdAt: "2024-07-11T09:42:00Z",
     updatedAt: "2024-07-18T15:12:00Z",
     imageSrc:
-      "https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=600&q=80",
-    sku: "VTG-CAM-142",
-    tags: ["photography", "vintage"]
+      "https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=600&q=80"
   },
   {
     id: "s2",
@@ -60,9 +55,7 @@ const SAMPLE_ITEMS: ListingItem[] = [
     createdAt: "2024-07-14T12:03:00Z",
     updatedAt: "2024-07-19T08:45:00Z",
     imageSrc:
-      "https://images.unsplash.com/photo-1512418490979-92798cec1380?auto=format&fit=crop&w=600&q=80",
-    sku: "CNDL-SET-03",
-    tags: ["candle", "handmade"]
+      "https://images.unsplash.com/photo-1512418490979-92798cec1380?auto=format&fit=crop&w=600&q=80"
   },
   {
     id: "s3",
@@ -76,9 +69,7 @@ const SAMPLE_ITEMS: ListingItem[] = [
     createdAt: "2024-07-16T18:26:00Z",
     updatedAt: "2024-07-19T08:00:00Z",
     imageSrc:
-      "https://images.unsplash.com/photo-1531297484001-80022131f5a1?auto=format&fit=crop&w=600&q=80",
-    sku: "MBA-2020-M1-16",
-    tags: ["electronics"]
+      "https://images.unsplash.com/photo-1531297484001-80022131f5a1?auto=format&fit=crop&w=600&q=80"
   },
   {
     id: "s4",
@@ -91,9 +82,7 @@ const SAMPLE_ITEMS: ListingItem[] = [
     createdAt: "2024-07-17T10:15:00Z",
     updatedAt: "2024-07-17T10:15:00Z",
     imageSrc:
-      "https://images.unsplash.com/photo-1518548419970-58e3b4079ab2?auto=format&fit=crop&w=600&q=80",
-    sku: "BPK-01-GR",
-    tags: ["bags", "travel"]
+      "https://images.unsplash.com/photo-1518548419970-58e3b4079ab2?auto=format&fit=crop&w=600&q=80"
   }
 ];
 
@@ -150,13 +139,21 @@ function App() {
   const [smartPricing, setSmartPricing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  useEffect(() => {
+    wsManager.connect(
+      (updatedItems) => setItems(updatedItems),
+      (error) => console.error('WS error:', error)
+    );
+
+    return () => wsManager.disconnect();
+  }, []);
+
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
       const matchesSearch =
         !search ||
         item.title.toLowerCase().includes(search.toLowerCase()) ||
-        item.sku?.toLowerCase().includes(search.toLowerCase()) ||
-        item.tags?.some((tag) => tag.toLowerCase().includes(search.toLowerCase()));
+        item.description.toLowerCase().includes(search.toLowerCase());
 
       const matchesPlatform =
         platformFilter === "all" || item.platform === platformFilter;
@@ -197,14 +194,13 @@ function App() {
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) {
-      setFormState((prev) => ({ ...prev, imageFile: undefined, imagePreview: "" }));
+      setFormState((prev) => ({ ...prev, imagePreview: null }));
       return;
     }
 
     const preview = URL.createObjectURL(file);
     setFormState((prev) => ({
       ...prev,
-      imageFile: file,
       imagePreview: preview
     }));
   };
@@ -217,7 +213,7 @@ function App() {
     }));
   };
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!formState.imagePreview) {
       alert("Please upload an item image before listing.");
@@ -229,26 +225,34 @@ function App() {
     }
 
     setIsSubmitting(true);
-    const newItem: ListingItem = {
-      id: generateId(),
-      title: formState.title,
-      description: formState.description,
-      platform: formState.platform,
-      price: Number(formState.price),
-      status: formState.status,
-      quantity: formState.quantity,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      imageSrc: formState.imagePreview,
-      sku: formState.sku || undefined,
-      tags: formState.tags
-        ? formState.tags.split(",").map((tag) => tag.trim()).filter(Boolean)
-        : undefined
-    };
+    try {
+      // Convert blob URL to actual blob
+      const response = await fetch(formState.imagePreview);
+      const blob = await response.blob();
 
-    setItems((prev) => [newItem, ...prev]);
-    resetForm();
-    setIsSubmitting(false);
+      // Create FormData to send multipart
+      const formData = new FormData();
+      formData.append("title", formState.title);
+      formData.append("description", formState.description);
+      formData.append("platform", formState.platform);
+      formData.append("price", String(formState.price));
+      formData.append("status", formState.status);
+      formData.append("quantity", String(formState.quantity));
+      formData.append("image", blob, "item-image.jpg");
+
+      await api.post("/add_item", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data"
+        }
+      });
+
+      resetForm();
+    } catch (error) {
+      alert("Failed to add item. Please try again.");
+      console.error('Error adding item:', error);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -356,7 +360,7 @@ function ListingWorkflowCard({
       isComplete: Boolean(formState.imagePreview),
       action: (
         <UploadDropzone
-          imagePreview={formState.imagePreview}
+          imagePreview={formState.imagePreview ?? undefined}
           onFileChange={onFileChange}
         />
       )
@@ -418,30 +422,6 @@ function ListingWorkflowCard({
               onChange={(event) =>
                 handleFieldChange("quantity", Number(event.target.value))
               }
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700">
-              SKU (optional)
-            </label>
-            <input
-              type="text"
-              value={formState.sku}
-              onChange={(event) => handleFieldChange("sku", event.target.value)}
-              placeholder="Internal identifier"
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700">
-              Tags
-            </label>
-            <input
-              type="text"
-              value={formState.tags}
-              onChange={(event) => handleFieldChange("tags", event.target.value)}
-              placeholder="separate with commas"
               className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
             />
           </div>
@@ -935,17 +915,6 @@ function InventoryTable({ items }: { items: ListingItem[] }) {
                   <p className="max-w-md truncate text-xs text-slate-500">
                     {item.description}
                   </p>
-                  <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-slate-500">
-                    {item.sku && <span>SKU: {item.sku}</span>}
-                    {item.tags?.map((tag) => (
-                      <span
-                        key={tag}
-                        className="rounded border border-slate-200 bg-slate-100 px-2 py-0.5"
-                      >
-                        #{tag}
-                      </span>
-                    ))}
-                  </div>
                 </div>
               </td>
               <td className="px-6 py-4">

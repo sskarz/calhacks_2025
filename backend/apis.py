@@ -1,4 +1,6 @@
-from fastapi import FastAPI, HTTPException, Query
+import asyncio
+from fastapi import FastAPI, HTTPException, Query, WebSocket, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import os
 import httpx
@@ -6,11 +8,26 @@ import secrets
 import hashlib
 import base64
 from pydantic import BaseModel
+import db
+import shutil
+from pathlib import Path
 
 # Load environment variables
 load_dotenv()
 
+conn = db.get_db_connection()
+db.initialize_db(conn)
+
 app = FastAPI(title="Etsy OAuth Backend")
+
+# Cors Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Configuration from .env
 ETSY_API_KEY = os.getenv("ETSY_API_KEY")
@@ -21,6 +38,8 @@ REDIRECT_URI = os.getenv("REDIRECT_URI", "http://localhost:8000/oauth/callback")
 oauth_sessions = {}
 token_storage = {}
 
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
 
 # Models
 class TokenResponse(BaseModel):
@@ -28,6 +47,16 @@ class TokenResponse(BaseModel):
     token_type: str
     expires_in: int
     refresh_token: str
+
+
+class ListingItem(BaseModel):
+    title: str
+    description: str
+    platform: str
+    price: float
+    status: str
+    quantity: int
+    imageSrc: str
 
 
 # PKCE Helper Functions
@@ -271,8 +300,70 @@ async def get_user_info(
             )
 
         return response.json()
+    
 
+
+# Frontend Endpoints
+
+@app.websocket("/api/stream")
+async def websocket_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time communication.
+    Sends database updates to connected clients.
+    """
+    await websocket.accept()
+    try:
+        while True:
+            # Create a fresh connection for each iteration
+            conn = db.get_db_connection()
+            items = db.get_all_items(conn)
+            # Convert Row objects to dictionaries and handle binary image data
+            items_list = []
+            if items:
+                for item in items:
+                    item_dict = dict(item)
+                    # Convert BLOB image to base64 for JSON serialization
+                    if item_dict.get('imageSrc') and isinstance(item_dict['imageSrc'], bytes):
+                        import base64
+                        item_dict['imageSrc'] = base64.b64encode(item_dict['imageSrc']).decode('utf-8')
+                    items_list.append(item_dict)
+            
+            await websocket.send_json(items_list)
+            await asyncio.sleep(2)  # Send updates every 2 seconds
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+    finally:
+        await websocket.close()
+
+@app.post("/api/add_item")
+async def add_item(
+    title: str = Form(...),
+    description: str = Form(...),
+    platform: str = Form(...),
+    price: float = Form(...),
+    status: str = Form(...),
+    quantity: int = Form(...),
+    image: UploadFile = File(...)
+):
+    """Add a new listing with image upload."""
+    try:
+        # Read image as bytes
+        image_data = await image.read()
+
+        conn = db.get_db_connection()
+        db.add_item(
+            title=title,
+            description=description,
+            platform=platform,
+            price=price,
+            quantity=quantity,
+            imageSrc=image_data,
+            conn=conn
+        )
+        return {"message": "Item added successfully", "status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, port=8000)

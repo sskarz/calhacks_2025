@@ -1,7 +1,7 @@
 import sqlite3
 
 # Initializers 
-def get_db_connection(db_path='database.db'):
+def get_db_connection(db_path='offersb.db'):
     """Establishes a connection to the SQLite database."""
     try:
         conn = sqlite3.connect(db_path)
@@ -18,10 +18,16 @@ def initialize_db(conn):
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                class TEXT NOT NULL,
-                init_price REAL NOT NULL,
-                high_price REAL NOT NULL DEFAULT init_price,
-                status TEXT DEFAULT 'available' CHECK (status IN ('available', 'sold', 'pending'))
+                title TEXT NOT NULL,
+                description TEXT,
+                platform TEXT NOT NULL,
+                price REAL NOT NULL,
+                high_price REAL NOT NULL DEFAULT price,
+                status TEXT DEFAULT 'listed' CHECK (status IN ('listed', 'sold', 'pending')),
+                quantity INTEGER DEFAULT 1,
+                imageSrc BLOB,
+                createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         conn.commit()
@@ -32,13 +38,14 @@ def initialize_db(conn):
 
 # Modifiers
 
-def add_item(item_class, init_price, conn):
+def add_item(title, description, platform, price, quantity, imageSrc, conn):
     """Adds a new item to the database."""
     try:
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO users (class, init_price) VALUES (?, ?)
-        ''', (item_class, init_price))
+            INSERT INTO users (title, description, platform, price, quantity, imageSrc)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (title, description, platform, price, quantity, imageSrc))
         conn.commit()
     except sqlite3.IntegrityError as e:
         print(f"Error adding item: {e}")
@@ -62,7 +69,7 @@ def update_high_price(item_id, asking_price, conn):
         
         if current_high < asking_price:
             cursor.execute('''
-                UPDATE users SET high_price = ? WHERE id = ?
+                UPDATE users SET high_price = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?
             ''', (asking_price, item_id))
             conn.commit()
             return (True, asking_price)
@@ -79,7 +86,7 @@ def update_status(item_id, new_status, conn):
     try:
         cursor = conn.cursor()
         cursor.execute('''
-            UPDATE users SET status = ? WHERE id = ?
+            UPDATE users SET status = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?
         ''', (new_status, item_id))
         conn.commit()
     except sqlite3.IntegrityError as e:
