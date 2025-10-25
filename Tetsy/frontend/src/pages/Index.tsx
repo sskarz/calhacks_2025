@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { toast } from "sonner";
 import Navigation from "@/components/Navigation";
 import ProductDashboard from "@/components/ProductDashboard";
-import ChatInterface, { type Negotiation, type Message } from "@/components/ChatInterface";
+import ChatInterface, { type Negotiation } from "@/components/ChatInterface";
 import OfferDialog from "@/components/OfferDialog";
 import { type Product } from "@/components/ProductCard";
-import { useToast } from "@/hooks/use-toast";
+import { api } from "@/lib/api";
 
-// Mock data - ready to be replaced with API endpoints
 const mockProducts: Product[] = [
   {
     id: "1",
@@ -75,95 +75,135 @@ const mockProducts: Product[] = [
 ];
 
 const Index = () => {
-  const { toast } = useToast();
   const [activeView, setActiveView] = useState<"shop" | "messages">("shop");
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [offerDialogOpen, setOfferDialogOpen] = useState(false);
   const [negotiations, setNegotiations] = useState<Negotiation[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Load negotiations from API on mount
+  useEffect(() => {
+    loadNegotiations();
+    
+    // Poll for updates every 3 seconds
+    const interval = setInterval(() => {
+      loadNegotiations();
+    }, 3000);
+    
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, []);
+
+  const loadNegotiations = async () => {
+    try {
+      const { data } = await api.get("/api/negotiations");
+      setNegotiations(data);
+    } catch (error) {
+      console.error("Failed to load negotiations:", error);
+      if (loading) {
+        toast.error("Failed to load negotiations");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadSingleNegotiation = async (negotiationId: string) => {
+    try {
+      const { data } = await api.get(`/api/negotiations/${negotiationId}`);
+      setNegotiations(prev => 
+        prev.map(n => n.id === negotiationId ? data : n)
+      );
+      return data;
+    } catch (error) {
+      console.error("Failed to load negotiation:", error);
+      throw error;
+    }
+  };
 
   const handleMakeOffer = (product: Product) => {
     setSelectedProduct(product);
     setOfferDialogOpen(true);
   };
 
-  const handleSubmitOffer = (productId: string, offerAmount: number, message: string) => {
+  const handleSubmitOffer = async (productId: string, offerAmount: number, message: string) => {
     const product = mockProducts.find(p => p.id === productId);
     if (!product) return;
 
-    // Create new negotiation - ready to be replaced with POST /api/negotiations
-    const newNegotiation: Negotiation = {
-      id: `neg-${Date.now()}`,
-      productId: product.id,
-      productTitle: product.title,
-      productImage: product.image,
-      seller: product.seller,
-      status: "pending",
-      lastOfferAmount: offerAmount,
-      messages: [
-        {
-          id: `msg-${Date.now()}`,
-          sender: "buyer",
-          content: message || `I'd like to offer $${offerAmount.toFixed(2)} for this item.`,
-          timestamp: new Date(),
-          type: "offer",
-          offerAmount: offerAmount
-        }
-      ]
-    };
+    try {
+      const { data } = await api.post("/api/negotiations", {
+        product_id: product.id,
+        product_title: product.title,
+        product_image: product.image,
+        seller_id: product.seller,
+        offer_amount: offerAmount,
+        message: message || `I'd like to offer $${offerAmount.toFixed(2)} for this item.`
+      });
 
-    setNegotiations(prev => [newNegotiation, ...prev]);
-    
-    toast({
-      title: "Offer Sent!",
-      description: `Your offer of $${offerAmount.toFixed(2)} has been sent to ${product.seller}`,
-    });
+      setNegotiations(prev => [data, ...prev]);
+      setOfferDialogOpen(false);
+      
+      toast.success(`Offer sent for $${offerAmount.toFixed(2)}`, {
+        description: `Sent to ${product.seller}`
+      });
 
-    setActiveView("messages");
+      setActiveView("messages");
+    } catch (error) {
+      console.error("Failed to submit offer:", error);
+      toast.error("Failed to send offer", {
+        description: "Please try again."
+      });
+    }
   };
 
-  const handleSendMessage = (negotiationId: string, messageContent: string) => {
-    // Send message - ready to be replaced with POST /api/negotiations/:id/messages
-    setNegotiations(prev => prev.map(neg => {
-      if (neg.id === negotiationId) {
-        return {
-          ...neg,
-          messages: [
-            ...neg.messages,
-            {
-              id: `msg-${Date.now()}`,
-              sender: "buyer",
-              content: messageContent,
-              timestamp: new Date(),
-              type: "message"
-            }
-          ]
-        };
-      }
-      return neg;
-    }));
+  const handleSendMessage = async (negotiationId: string, messageContent: string, offerAmount?: number) => {
+    try {
+      const type = offerAmount ? "offer" : "message";
+      
+      await api.post(`/api/negotiations/${negotiationId}/messages`, {
+        negotiationId,
+        content: messageContent,
+        type,
+        offerAmount: offerAmount || undefined
+      });
 
-    toast({
-      title: "Message Sent",
-      description: "Your message has been delivered",
-    });
+      await loadSingleNegotiation(negotiationId);
+
+      if (offerAmount) {
+        toast.success(`Counter offer sent for $${offerAmount.toFixed(2)}`);
+      } else {
+        toast.success("Message sent");
+      }
+    } catch (error) {
+      console.error("Failed to send message:", error);
+      toast.error("Failed to send message", {
+        description: "Please try again."
+      });
+    }
   };
 
-  const handleRespondToOffer = (negotiationId: string, accept: boolean) => {
-    // Respond to offer - ready to be replaced with PUT /api/negotiations/:id
-    setNegotiations(prev => prev.map(neg => {
-      if (neg.id === negotiationId) {
-        return {
-          ...neg,
-          status: accept ? "accepted" : "rejected"
-        };
+  const handleRespondToOffer = async (negotiationId: string, accept: boolean) => {
+    try {
+      if (accept) {
+        await api.post(`/api/negotiations/${negotiationId}/accept`);
       }
-      return neg;
-    }));
 
-    toast({
-      title: accept ? "Offer Accepted" : "Offer Rejected",
-      description: accept ? "The seller has accepted your offer!" : "The seller has declined your offer",
-    });
+      await loadSingleNegotiation(negotiationId);
+
+      if (accept) {
+        toast.success("Offer accepted!", {
+          description: "Congratulations on your purchase"
+        });
+      } else {
+        toast.info("Offer declined");
+      }
+    } catch (error) {
+      console.error("Failed to respond to offer:", error);
+      toast.error("Failed to respond to offer", {
+        description: "Please try again."
+      });
+    }
   };
 
   return (
