@@ -270,6 +270,7 @@ async def oauth_callback(
             return HTMLResponse(content=f"<h1>❌ Token exchange failed</h1><p>{response.text}</p>", status_code=500)
 
         token_data = response.json()
+        print(f"[OAuth] Generated access token: {token_data.get('access_token')}")
         token_storage["current_token"] = token_data
 
         del oauth_sessions[state]
@@ -614,6 +615,28 @@ async def test_all_endpoints():
                 "returnPolicyId": return_policy_id
             }
             log_test("8", "Adding business policies to offer", True)
+        else:
+            # Fallback shipping data when Business Policies API is unavailable for the seller account.
+            offer_payload["shippingOptions"] = [{
+                "optionType": "DOMESTIC",
+                "costType": "FLAT_RATE",
+                "shippingServices": [{
+                    "sortOrderId": 1,
+                    "shippingServiceCode": "USPSPriorityFlatRateEnvelope",
+                    "shippingCost": {
+                        "value": "0.00",
+                        "currency": "USD"
+                    },
+                    "shippingCostType": "FLAT_RATE",
+                    "freeShipping": True
+                }]
+            }]
+            offer_payload["shipToLocations"] = {
+                "regionIncluded": [
+                    {"regionName": "UNITED_STATES"}
+                ]
+            }
+            log_test("8", "Applying inline shipping options fallback", True)
 
         offer_url = f"{SANDBOX_INVENTORY_BASE}/offer"
         offer_response = requests.post(offer_url, headers=headers, json=offer_payload)
