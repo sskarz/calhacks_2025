@@ -1,4 +1,6 @@
 import base64
+from dotenv import load_dotenv
+import os
 import requests
 import secrets
 from typing import Optional, List
@@ -19,9 +21,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+load_dotenv()
+
 # eBay Sandbox Credentials
-CLIENT_ID = "SanskarT-Tetsy-SBX-fea249f36-826d7281"
-CLIENT_SECRET = "SBX-ea249f36539c-3d76-49ef-83a3-f466"
+CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
+CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
 REDIRECT_URI = "Sanskar_Thapa-SanskarT-Tetsy--ttepui"
 SANDBOX_TOKEN_URL = "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
 SANDBOX_AUTH_URL = "https://auth.sandbox.ebay.com/oauth2/authorize"
