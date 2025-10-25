@@ -32,7 +32,7 @@ app.add_middleware(
 # Configuration from .env
 ETSY_API_KEY = os.getenv("ETSY_API_KEY")
 ETSY_SHARED_SECRET = os.getenv("ETSY_SHARED_SECRET")
-REDIRECT_URI = os.getenv("REDIRECT_URI", "http://localhost:8000/oauth/callback")
+REDIRECT_URI = os.getenv("REDIRECT_URI", "http://localhost:8001/oauth/callback")
 
 # In-memory storage for PKCE verifiers and tokens (use database in production)
 oauth_sessions = {}

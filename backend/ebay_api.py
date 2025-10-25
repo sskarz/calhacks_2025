@@ -27,7 +27,7 @@ load_dotenv()
 CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
 CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
 REDIRECT_URI = "Sanskar_Thapa-SanskarT-Tetsy--ttepui"  # This is the RuName
-PUBLIC_URL = os.getenv("PUBLIC_URL", "http://localhost:8001")  # Set to your ngrok URL
+PUBLIC_URL = os.getenv("PUBLIC_URL", "http://localhost:8000")  # Set to your ngrok URL
 SANDBOX_TOKEN_URL = "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
 SANDBOX_AUTH_URL = "https://auth.sandbox.ebay.com/oauth2/authorize"
 
