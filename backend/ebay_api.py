@@ -49,12 +49,171 @@ oauth_sessions = {}
 token_storage = {"current_token": None}
 
 
+# eBay Sandbox API URLs
+SANDBOX_INVENTORY_BASE = "https://api.sandbox.ebay.com/sell/inventory/v1"
+SANDBOX_ACCOUNT_BASE = "https://api.sandbox.ebay.com/sell/account/v1"
+
+
 # Models
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str
     expires_in: int
     refresh_token: Optional[str] = None
+
+
+class ProductDetails(BaseModel):
+    title: str
+    description: str
+    brand: Optional[str] = None
+    mpn: Optional[str] = None
+    imageUrls: List[str]
+    aspects: Optional[dict] = None
+
+
+class CreateInventoryItemRequest(BaseModel):
+    sku: str
+    condition: str = "NEW"  # NEW, USED_EXCELLENT, etc.
+    product: ProductDetails
+    availability_quantity: int
+
+
+class CreateOfferRequest(BaseModel):
+    sku: str
+    categoryId: str
+    price: float
+    currency: str = "USD"
+    listingDuration: str = "GTC"  # Good 'Til Cancelled
+    merchantLocationKey: str = "default_location"
+
+
+class CreateListingRequest(BaseModel):
+    sku: str
+    title: str
+    description: str
+    price: float
+    quantity: int
+    categoryId: str
+    condition: str = "NEW"
+    imageUrls: List[str]
+    brand: Optional[str] = None
+    currency: str = "USD"
+
+
+# Helper Functions
+def get_access_token():
+    """Get the current access token from storage"""
+    if not token_storage["current_token"]:
+        raise HTTPException(
+            status_code=401,
+            detail="No access token available. Please authorize first via /start-auth"
+        )
+    return token_storage["current_token"]["access_token"]
+
+
+def get_or_create_policies():
+    """Get existing policies or create default ones for sandbox testing"""
+    access_token = get_access_token()
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Content-Language": "en-US"
+    }
+
+    policies = {}
+
+    # Check for existing fulfillment policy
+    fulfillment_url = f"{SANDBOX_ACCOUNT_BASE}/fulfillment_policy?marketplace_id=EBAY_US"
+    fulfillment_response = requests.get(fulfillment_url, headers=headers)
+
+    if fulfillment_response.status_code == 200:
+        fulfillment_data = fulfillment_response.json()
+        if fulfillment_data.get("total", 0) > 0:
+            policies["fulfillmentPolicyId"] = fulfillment_data["fulfillmentPolicies"][0]["fulfillmentPolicyId"]
+            print(f"[POLICY] Using existing fulfillment policy: {policies['fulfillmentPolicyId']}")
+        else:
+            # Create default fulfillment policy
+            fulfillment_payload = {
+                "name": "Default Free Shipping",
+                "marketplaceId": "EBAY_US",
+                "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+                "handlingTime": {"unit": "DAY", "value": 1},
+                "shippingOptions": [{
+                    "optionType": "DOMESTIC",
+                    "costType": "FLAT_RATE",
+                    "shippingServices": [{
+                        "shippingServiceCode": "USPSPriority",
+                        "freeShipping": True
+                    }]
+                }]
+            }
+            create_response = requests.post(
+                f"{SANDBOX_ACCOUNT_BASE}/fulfillment_policy/",
+                headers=headers,
+                json=fulfillment_payload
+            )
+            if create_response.status_code in [200, 201]:
+                policies["fulfillmentPolicyId"] = create_response.json()["fulfillmentPolicyId"]
+                print(f"[POLICY] Created new fulfillment policy: {policies['fulfillmentPolicyId']}")
+
+    # Check for existing payment policy
+    payment_url = f"{SANDBOX_ACCOUNT_BASE}/payment_policy?marketplace_id=EBAY_US"
+    payment_response = requests.get(payment_url, headers=headers)
+
+    if payment_response.status_code == 200:
+        payment_data = payment_response.json()
+        if payment_data.get("total", 0) > 0:
+            policies["paymentPolicyId"] = payment_data["paymentPolicies"][0]["paymentPolicyId"]
+            print(f"[POLICY] Using existing payment policy: {policies['paymentPolicyId']}")
+        else:
+            # Create default payment policy
+            payment_payload = {
+                "name": "Default Payment Policy",
+                "marketplaceId": "EBAY_US",
+                "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+                "paymentMethods": [{"paymentMethodType": "PAYPAL"}],
+                "immediatePay": False
+            }
+            create_response = requests.post(
+                f"{SANDBOX_ACCOUNT_BASE}/payment_policy/",
+                headers=headers,
+                json=payment_payload
+            )
+            if create_response.status_code in [200, 201]:
+                policies["paymentPolicyId"] = create_response.json()["paymentPolicyId"]
+                print(f"[POLICY] Created new payment policy: {policies['paymentPolicyId']}")
+
+    # Check for existing return policy
+    return_url = f"{SANDBOX_ACCOUNT_BASE}/return_policy?marketplace_id=EBAY_US"
+    return_response = requests.get(return_url, headers=headers)
+
+    if return_response.status_code == 200:
+        return_data = return_response.json()
+        if return_data.get("total", 0) > 0:
+            policies["returnPolicyId"] = return_data["returnPolicies"][0]["returnPolicyId"]
+            print(f"[POLICY] Using existing return policy: {policies['returnPolicyId']}")
+        else:
+            # Create default return policy
+            return_payload = {
+                "name": "Default Return Policy",
+                "marketplaceId": "EBAY_US",
+                "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+                "returnsAccepted": True,
+                "returnPeriod": {"unit": "DAY", "value": 30},
+                "refundMethod": "MONEY_BACK",
+                "returnShippingCostPayer": "BUYER"
+            }
+            create_response = requests.post(
+                f"{SANDBOX_ACCOUNT_BASE}/return_policy/",
+                headers=headers,
+                json=return_payload
+            )
+            if create_response.status_code in [200, 201]:
+                policies["returnPolicyId"] = create_response.json()["returnPolicyId"]
+                print(f"[POLICY] Created new return policy: {policies['returnPolicyId']}")
+
+    return policies
 
 
 # Endpoints
@@ -523,6 +682,402 @@ async def refresh_token(refresh_token: Optional[str] = None):
             status_code=500,
             detail=f"Request failed: {str(e)}"
         )
+
+
+# eBay Listing Endpoints
+
+@app.post("/inventory/create-location")
+async def create_inventory_location(
+    location_key: str = "default_location",
+    name: str = "Default Location",
+    address_line1: str = "123 Main St",
+    city: str = "San Jose",
+    state_or_province: str = "CA",
+    postal_code: str = "95050",
+    country: str = "US"
+):
+    """
+    Create an inventory location. Required before creating offers.
+    eBay requires at least one location to be set up for your account.
+    """
+    try:
+        access_token = get_access_token()
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "Content-Language": "en-US"
+        }
+
+        payload = {
+            "location": {
+                "address": {
+                    "addressLine1": address_line1,
+                    "city": city,
+                    "stateOrProvince": state_or_province,
+                    "postalCode": postal_code,
+                    "country": country
+                }
+            },
+            "locationInstructions": "Items ship from this location",
+            "name": name,
+            "merchantLocationStatus": "ENABLED",
+            "locationTypes": ["WAREHOUSE"]
+        }
+
+        url = f"{SANDBOX_INVENTORY_BASE}/location/{location_key}"
+        response = requests.post(url, headers=headers, json=payload)
+
+        if response.status_code in [200, 201, 204]:
+            return {
+                "success": True,
+                "message": "Inventory location created successfully",
+                "location_key": location_key
+            }
+        else:
+            # Location might already exist
+            if response.status_code == 409:
+                return {
+                    "success": True,
+                    "message": "Location already exists",
+                    "location_key": location_key
+                }
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Failed to create location: {response.text}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/inventory/create-item")
+async def create_inventory_item(request: CreateInventoryItemRequest):
+    """
+    Step 1: Create an inventory item with product details.
+    This is the first step in creating an eBay listing.
+    """
+    try:
+        access_token = get_access_token()
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "Content-Language": "en-US"
+        }
+
+        # Prepare the inventory item payload
+        payload = {
+            "availability": {
+                "shipToLocationAvailability": {
+                    "quantity": request.availability_quantity
+                }
+            },
+            "condition": request.condition,
+            "product": {
+                "title": request.product.title,
+                "description": request.product.description,
+                "imageUrls": request.product.imageUrls
+            }
+        }
+
+        # Add optional fields if provided
+        if request.product.brand:
+            payload["product"]["brand"] = request.product.brand
+        if request.product.mpn:
+            payload["product"]["mpn"] = request.product.mpn
+        if request.product.aspects:
+            payload["product"]["aspects"] = request.product.aspects
+
+        # Create inventory item
+        url = f"{SANDBOX_INVENTORY_BASE}/inventory_item/{request.sku}"
+        response = requests.put(url, headers=headers, json=payload)
+
+        if response.status_code in [200, 201, 204]:
+            return {
+                "success": True,
+                "message": "Inventory item created successfully",
+                "sku": request.sku,
+                "status_code": response.status_code
+            }
+        else:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Failed to create inventory item: {response.text}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/inventory/create-offer")
+async def create_offer(request: CreateOfferRequest):
+    """
+    Step 2: Create an offer for an inventory item.
+    The offer includes pricing and marketplace information.
+    """
+    try:
+        access_token = get_access_token()
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "Content-Language": "en-US"
+        }
+
+        # Prepare the offer payload
+        payload = {
+            "sku": request.sku,
+            "marketplaceId": "EBAY_US",
+            "format": "FIXED_PRICE",
+            "listingDescription": f"Listed via API for SKU {request.sku}",
+            "categoryId": request.categoryId,
+            "merchantLocationKey": request.merchantLocationKey,
+            "listingDuration": request.listingDuration,
+            "pricingSummary": {
+                "price": {
+                    "value": str(request.price),
+                    "currency": request.currency
+                }
+            }
+        }
+
+        # Create offer
+        url = f"{SANDBOX_INVENTORY_BASE}/offer"
+        response = requests.post(url, headers=headers, json=payload)
+
+        if response.status_code in [200, 201]:
+            offer_data = response.json()
+            return {
+                "success": True,
+                "message": "Offer created successfully",
+                "offerId": offer_data.get("offerId"),
+                "status": offer_data.get("status"),
+                "data": offer_data
+            }
+        else:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Failed to create offer: {response.text}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/inventory/publish-offer/{offer_id}")
+async def publish_offer(offer_id: str):
+    """
+    Step 3: Publish an offer to create a live eBay listing.
+    This makes the listing visible on eBay.
+    """
+    try:
+        access_token = get_access_token()
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+
+        # Publish offer
+        url = f"{SANDBOX_INVENTORY_BASE}/offer/{offer_id}/publish"
+        response = requests.post(url, headers=headers)
+
+        if response.status_code == 200:
+            listing_data = response.json()
+            return {
+                "success": True,
+                "message": "Offer published successfully!",
+                "listingId": listing_data.get("listingId"),
+                "warnings": listing_data.get("warnings", []),
+                "data": listing_data
+            }
+        else:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Failed to publish offer: {response.text}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/listing/create")
+async def create_complete_listing(request: CreateListingRequest):
+    """
+    Simplified endpoint: Create a complete eBay listing in one call.
+    This combines all three steps: create item, create offer, and publish.
+
+    Example request:
+    {
+        "sku": "GOPRO-HERO-001",
+        "title": "GoPro Hero4 Helmet Cam",
+        "description": "New unopened box. Perfect condition.",
+        "price": 299.99,
+        "quantity": 10,
+        "categoryId": "31388",
+        "condition": "NEW",
+        "imageUrls": ["https://example.com/image.jpg"],
+        "brand": "GoPro",
+        "currency": "USD"
+    }
+    """
+    try:
+        access_token = get_access_token()
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "Content-Language": "en-US"
+        }
+
+        # Step 0: Ensure location exists
+        print(f"[LISTING] Step 0: Ensuring inventory location exists")
+        location_payload = {
+            "location": {
+                "address": {
+                    "addressLine1": "123 Main Street",
+                    "city": "San Jose",
+                    "stateOrProvince": "CA",
+                    "postalCode": "95050",
+                    "country": "US"
+                }
+            },
+            "locationInstructions": "Items ship from this location",
+            "name": "Default Location",
+            "merchantLocationStatus": "ENABLED",
+            "locationTypes": ["WAREHOUSE"]
+        }
+
+        location_url = f"{SANDBOX_INVENTORY_BASE}/location/default_location"
+        location_response = requests.post(location_url, headers=headers, json=location_payload)
+
+        # 409 means location already exists, which is fine
+        if location_response.status_code not in [200, 201, 204, 409]:
+            print(f"[LISTING] ⚠️ Location creation warning: {location_response.status_code} - {location_response.text}")
+        else:
+            print(f"[LISTING] ✓ Location ready")
+
+        # Step 1: Create Inventory Item
+        print(f"[LISTING] Step 1: Creating inventory item for SKU {request.sku}")
+        inventory_payload = {
+            "availability": {
+                "shipToLocationAvailability": {
+                    "quantity": request.quantity
+                }
+            },
+            "condition": request.condition,
+            "product": {
+                "title": request.title,
+                "description": request.description,
+                "imageUrls": request.imageUrls
+            }
+        }
+
+        if request.brand:
+            inventory_payload["product"]["brand"] = request.brand
+
+        inventory_url = f"{SANDBOX_INVENTORY_BASE}/inventory_item/{request.sku}"
+        inventory_response = requests.put(inventory_url, headers=headers, json=inventory_payload)
+
+        if inventory_response.status_code not in [200, 201, 204]:
+            raise HTTPException(
+                status_code=inventory_response.status_code,
+                detail=f"Step 1 failed - Create inventory item: {inventory_response.text}"
+            )
+
+        print(f"[LISTING] ✓ Inventory item created")
+
+        # Step 1.5: Try to get policies (optional for sandbox)
+        print(f"[LISTING] Step 1.5: Checking for business policies")
+        try:
+            policies = get_or_create_policies()
+            use_policies = all(k in policies for k in ["fulfillmentPolicyId", "paymentPolicyId", "returnPolicyId"])
+            if use_policies:
+                print(f"[LISTING] ✓ Will use business policies")
+            else:
+                print(f"[LISTING] ⚠️ Business policies not available (common in sandbox)")
+        except Exception as e:
+            print(f"[LISTING] ⚠️ Could not get policies: {str(e)}")
+            policies = {}
+            use_policies = False
+
+        # Step 2: Create Offer
+        print(f"[LISTING] Step 2: Creating offer")
+        offer_payload = {
+            "sku": request.sku,
+            "marketplaceId": "EBAY_US",
+            "format": "FIXED_PRICE",
+            "listingDescription": request.description,
+            "categoryId": request.categoryId,
+            "merchantLocationKey": "default_location",
+            "listingDuration": "GTC",
+            "pricingSummary": {
+                "price": {
+                    "value": str(request.price),
+                    "currency": request.currency
+                }
+            }
+        }
+
+        # Add policies if available
+        if use_policies:
+            offer_payload["listingPolicies"] = {
+                "fulfillmentPolicyId": policies["fulfillmentPolicyId"],
+                "paymentPolicyId": policies["paymentPolicyId"],
+                "returnPolicyId": policies["returnPolicyId"]
+            }
+
+        offer_url = f"{SANDBOX_INVENTORY_BASE}/offer"
+        offer_response = requests.post(offer_url, headers=headers, json=offer_payload)
+
+        if offer_response.status_code not in [200, 201]:
+            raise HTTPException(
+                status_code=offer_response.status_code,
+                detail=f"Step 2 failed - Create offer: {offer_response.text}"
+            )
+
+        offer_data = offer_response.json()
+        offer_id = offer_data.get("offerId")
+        print(f"[LISTING] ✓ Offer created: {offer_id}")
+
+        # Step 3: Publish Offer
+        print(f"[LISTING] Step 3: Publishing offer")
+        publish_url = f"{SANDBOX_INVENTORY_BASE}/offer/{offer_id}/publish"
+        publish_response = requests.post(publish_url, headers=headers)
+
+        if publish_response.status_code == 200:
+            listing_data = publish_response.json()
+            listing_id = listing_data.get("listingId")
+            print(f"[LISTING] ✓ Listing published: {listing_id}")
+
+            return {
+                "success": True,
+                "message": "Listing created and published successfully!",
+                "sku": request.sku,
+                "offerId": offer_id,
+                "listingId": listing_id,
+                "sandbox_url": f"https://www.sandbox.ebay.com/itm/{listing_id}",
+                "warnings": listing_data.get("warnings", [])
+            }
+        else:
+            raise HTTPException(
+                status_code=publish_response.status_code,
+                detail=f"Step 3 failed - Publish offer: {publish_response.text}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
