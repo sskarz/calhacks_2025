@@ -26,7 +26,8 @@ load_dotenv()
 # eBay Sandbox Credentials
 CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
 CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
-REDIRECT_URI = "Sanskar_Thapa-SanskarT-Tetsy--ttepui"
+REDIRECT_URI = "Sanskar_Thapa-SanskarT-Tetsy--ttepui"  # This is the RuName
+PUBLIC_URL = os.getenv("PUBLIC_URL", "http://localhost:8001")  # Set to your ngrok URL
 SANDBOX_TOKEN_URL = "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
 SANDBOX_AUTH_URL = "https://auth.sandbox.ebay.com/oauth2/authorize"
 
@@ -58,8 +59,17 @@ class TokenResponse(BaseModel):
 
 # Endpoints
 @app.get("/", response_class=HTMLResponse)
-async def root():
-    """Root endpoint with test flow instructions"""
+async def root(
+    code: Optional[str] = Query(None, description="Authorization code from eBay"),
+    state: Optional[str] = Query(None, description="State parameter for CSRF protection")
+):
+    """Root endpoint with test flow instructions. Also handles OAuth callback."""
+    
+    # If code and state are present, this is an OAuth callback - forward to handler
+    if code and state:
+        return await oauth_callback(code=code, state=state)
+    
+    # Otherwise, show the normal HTML page
     html_content = """
     <!DOCTYPE html>
     <html>
@@ -276,6 +286,12 @@ async def oauth_callback(
         )
 
     try:
+        # Debug logging
+        print(f"\n[DEBUG] Processing OAuth callback")
+        print(f"[DEBUG] State: {state}")
+        print(f"[DEBUG] Code received: {code[:20]}...")
+        print(f"[DEBUG] REDIRECT_URI (RuName): {REDIRECT_URI}")
+
         # Encode credentials in Base64
         credentials = f"{CLIENT_ID}:{CLIENT_SECRET}"
         encoded_credentials = base64.b64encode(credentials.encode()).decode()
@@ -293,6 +309,8 @@ async def oauth_callback(
             "redirect_uri": REDIRECT_URI
         }
 
+        print(f"[DEBUG] Requesting token from: {SANDBOX_TOKEN_URL}")
+
         # Exchange code for token
         response = requests.post(
             SANDBOX_TOKEN_URL,
@@ -300,7 +318,10 @@ async def oauth_callback(
             data=body
         )
 
+        print(f"[DEBUG] Token response status: {response.status_code}")
+
         if response.status_code != 200:
+            print(f"[DEBUG] Token exchange failed: {response.text}")
             return HTMLResponse(
                 content=f"""
                 <html>
@@ -318,6 +339,12 @@ async def oauth_callback(
 
         # Store token
         token_storage["current_token"] = token_data
+
+        print(f"[DEBUG] Token successfully stored!")
+        print(f"[DEBUG] Token type: {token_data.get('token_type')}")
+        print(f"[DEBUG] Expires in: {token_data.get('expires_in')} seconds")
+        print(f"[DEBUG] Has refresh token: {bool(token_data.get('refresh_token'))}")
+        print(f"[DEBUG] Current token storage: {bool(token_storage['current_token'])}")
 
         # Clean up session
         del oauth_sessions[state]
@@ -415,8 +442,13 @@ async def get_token_status():
     Check the current token status.
     Returns token information if available.
     """
+    print(f"\n[DEBUG] Token status check")
+    print(f"[DEBUG] token_storage contents: {token_storage}")
+    print(f"[DEBUG] Has token: {bool(token_storage['current_token'])}")
+
     if token_storage["current_token"]:
         token_data = token_storage["current_token"]
+        print(f"[DEBUG] Returning token data")
         return {
             "has_token": True,
             "access_token": token_data.get("access_token"),
@@ -425,6 +457,7 @@ async def get_token_status():
             "refresh_token": token_data.get("refresh_token")
         }
     else:
+        print(f"[DEBUG] No token found in storage")
         return {
             "has_token": False,
             "message": "No token available. Please authorize first."
@@ -498,8 +531,12 @@ if __name__ == "__main__":
     print("🚀 eBay OAuth Test Server Starting...")
     print("="*60)
     print("\n📋 Quick Start:")
-    print("   1. Open your browser to: http://localhost:8001")
-    print("   2. Click 'Start eBay Authorization'")
+    print(f"   1. Open your browser to: {PUBLIC_URL}")
+    if "localhost" in PUBLIC_URL:
+        print("\n   ⚠️  IMPORTANT: eBay requires HTTPS for OAuth!")
+        print("   Run 'ngrok http 8001' and set PUBLIC_URL env var")
+        print("   Example: PUBLIC_URL=https://abc123.ngrok.io")
+    print("\n   2. Click 'Start eBay Authorization'")
     print("   3. Sign in with your eBay Sandbox account")
     print("   4. Grant permissions")
     print("   5. You'll get your OAuth token!")
