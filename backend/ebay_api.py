@@ -1808,7 +1808,7 @@ async def publish_listing(
     quantity: int = Query(default=1, description="Available quantity"),
     brand: str = Query(default="Generic", description="Product brand"),
     category_id: str = Query(default="31388", description="eBay category ID (default: Cameras & Photo)"),
-    image_url: str = Query(default="https://i.ebayimg.com/images/g/T~0AAOSwf6RkP3aI/s-l1600.jpg", description="Product image URL (must use HTTPS)")
+    image_url: str = Query(default="https://i.ytimg.com/vi/Y13DcudSY8c/hq720.jpg?sqp=-oaymwEhCK4FEIIDSFryq4qpAxMIARUAAAAAGAElAADIQj0AgKJD&rs=AOn4CLCciXbZTi3Nr0oHVpz7sq7fVdFHxQ", description="Product image URL (must use HTTPS)")
 ):
     """
     Simplified endpoint to publish a listing to eBay.
