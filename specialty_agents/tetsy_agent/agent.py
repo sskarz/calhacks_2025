@@ -3,7 +3,12 @@ from google.adk.agents.llm_agent import Agent
 import httpx
 
 async def post_listing_to_tetsy(name: str, description: str, price: float) -> str:
-    """Post a new listing to Tetsy."""
+    """Post a new listing to Tetsy.
+        When the user asks to post something, you MUST call this tool with:
+        - name: the item name
+        - description: the item description  
+        - price: the price as a float
+    """
     import logging
     logger = logging.getLogger(__name__)
     
@@ -32,15 +37,8 @@ root_agent = Agent(
     name='tetsy_agent',
     description='Posts listings to Tetsy',
     instruction='''You are a Tetsy listing agent. Your job is to help users post listings on Tetsy.
-
-You have ONE tool available: post_listing_to_tetsy(name, description, price)
-
-When the user asks to post something, you MUST call this tool with:
-- name: the item name
-- description: the item description  
-- price: the price as a float
-
-Always call the tool when asked to post a listing. Extract the name, description, and price from the user's request and pass them to the tool.''',
+    You have ONE tool available: post_listing_to_tetsy(name, description, price)
+    Always call the tool when asked to post a listing. Extract the name, description, and price from the user's request and pass them to the tool.''',
     tools=[
         FunctionTool(post_listing_to_tetsy),
         FunctionTool(check_tetsy_notifications),

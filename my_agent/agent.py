@@ -1,5 +1,6 @@
+from google.adk.agents.remote_a2a_agent import AGENT_CARD_WELL_KNOWN_PATH
+from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
 from google.adk.agents.llm_agent import Agent
-from google.adk.agents.llm_agent import LlmAgent
 
 # Mock tool implementation
 def get_current_time(city: str) -> dict:
@@ -21,23 +22,14 @@ def post_Listing_test() :
 
 #==========================================
 
-tetsy_agent = Agent(
-    name="tetsy_agent",
-    model='gemini-2.5-flash', # Can be a string for Gemini or a LiteLlm object
-    description="Provides ecommerence tasks for the ecommerence site Tetsy.",
-    instruction=
-    """
-    You are a helpful emcommernce assistant. ",
-    When the user ask to do postings, the do the post_Listing_test function
-    When the user ask to get price, then to the get_Price_test function
-    tools=[post_Listing_test], # Pass the function directly
-    """,
-    tools = [get_Price_test, post_Listing_test],
+tetsy_agent = RemoteA2aAgent(
+    name='tetsy_agent',
+    agent_card='http://localhost:10001/.well-known/agent-card.json',
 )
 
 #=============================
 
-root_agent = LlmAgent(
+root_agent = Agent(
     model='gemini-2.5-flash',
     name='root_agent',
     description="Tells the current time in a specified city and emcommerence agent",

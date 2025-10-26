@@ -1,5 +1,10 @@
 from google.adk.a2a.utils.agent_to_a2a import to_a2a
 from .agent import root_agent
+from dotenv import load_dotenv
+import os
+
+# Load .env file
+load_dotenv()
 
 a2a_app = to_a2a(root_agent, port=10001)
 
