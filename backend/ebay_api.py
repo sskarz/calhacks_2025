@@ -6,23 +6,33 @@ inventory management, offers, and listing publication.
 
 IMPORTANT eBay API Requirements (learned from testing):
 
-1. SKU Format: ONLY alphanumeric characters allowed (A-Z, a-z, 0-9)
+1. Business Policies Opt-in - REQUIRED FIRST STEP:
+   - MUST opt-in to SELLING_POLICY_MANAGEMENT program via Account API
+   - Without opt-in: Error 20403 "Seller is not opted in to business policies"
+   - Use /check-optin-status to check if already opted in
+   - Use /optin-to-business-policies to opt-in programmatically
+   - Manual opt-in URL: http://www.bizpolicy.sandbox.ebay.com/businesspolicy/policyoptin
+   - Processing can take a few minutes in sandbox (up to 24 hours in production)
+
+2. Business Policies Required for Publishing:
+   - Fulfillment Policy (with shipping services) - Error 25007 if missing/invalid
+   - Payment Policy - Error 20403 if not opted in
+   - Return Policy - Error 20403 if not opted in
+   - ALL THREE policies must be created BEFORE publishing an offer
+   - Inline shipping options are NOT sufficient - business policies are mandatory
+   - Policies are reusable across multiple offers
+
+3. SKU Format: ONLY alphanumeric characters allowed (A-Z, a-z, 0-9)
    - NO hyphens, underscores, or special characters
    - Max length: 50 characters
    - Error 25707 occurs if SKU contains invalid characters
 
-2. Brand/MPN: When providing a brand, many categories require MPN (Manufacturer Part Number)
-   - Category 31388 (Cameras & Photo) requires BOTH brand AND mpn
-   - Error 25002 occurs if MPN is missing when required
+4. Product Specifics: Many categories require specific item attributes
+   - Category 31388 (Cameras & Photo) requires: brand, mpn, AND Model (via aspects)
+   - Error 25002 occurs if required product specifics are missing
+   - Use the "aspects" field to provide category-specific attributes like Model
 
-3. Business Policies Required for Publishing:
-   - Fulfillment Policy (with shipping services) - Error 25007 if missing
-   - Payment Policy
-   - Return Policy
-   - All three policies must be created BEFORE publishing an offer
-   - Policies are reusable across multiple offers
-
-4. Getting Offers: Query by SKU to avoid errors from old invalid SKUs
+5. Getting Offers: Query by SKU to avoid errors from old invalid SKUs
    - Use GET /offer?sku={sku} instead of GET /offer
    - Prevents error 25707 from old inventory items with invalid SKU formats
 """
@@ -112,6 +122,68 @@ def log_test(step: str, message: str, success: bool = True):
     print(f"[TEST {step}] {symbol} {message}")
 
 
+def check_opted_in_programs():
+    """
+    Check which seller programs the account is opted into.
+    Returns the list of opted-in programs or None if the call fails.
+    """
+    try:
+        headers = get_headers()
+        url = f"{SANDBOX_ACCOUNT_BASE}/program/get_opted_in_programs"
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+            data = response.json()
+            programs = data.get("programs", [])
+            return [p.get("programType") for p in programs]
+        else:
+            log_test("OPT-IN CHECK", f"Failed to check opt-in status: {response.text}", False)
+            return None
+    except Exception as e:
+        log_test("OPT-IN CHECK", f"Error checking opt-in status: {str(e)}", False)
+        return None
+
+
+def opt_in_to_selling_policies():
+    """
+    Opt-in to SELLING_POLICY_MANAGEMENT program.
+    This is required to create and use business policies (fulfillment, payment, return).
+
+    Returns:
+        dict: Status of the opt-in attempt
+    """
+    try:
+        headers = get_headers()
+        url = f"{SANDBOX_ACCOUNT_BASE}/program/opt_in"
+        payload = {"programType": "SELLING_POLICY_MANAGEMENT"}
+
+        response = requests.post(url, headers=headers, json=payload)
+
+        if response.status_code == 200:
+            log_test("OPT-IN", "Successfully opted in to SELLING_POLICY_MANAGEMENT", True)
+            return {
+                "success": True,
+                "message": "Successfully opted in to SELLING_POLICY_MANAGEMENT",
+                "note": "It may take a few minutes for the opt-in to take effect in sandbox"
+            }
+        else:
+            log_test("OPT-IN", f"Failed to opt-in: {response.text}", False)
+            return {
+                "success": False,
+                "message": "Failed to opt-in",
+                "error": response.text,
+                "manual_optin_url": "http://www.bizpolicy.sandbox.ebay.com/businesspolicy/policyoptin"
+            }
+    except Exception as e:
+        log_test("OPT-IN", f"Error during opt-in: {str(e)}", False)
+        return {
+            "success": False,
+            "message": "Error during opt-in",
+            "error": str(e),
+            "manual_optin_url": "http://www.bizpolicy.sandbox.ebay.com/businesspolicy/policyoptin"
+        }
+
+
 # ============================================================================
 # OAUTH ENDPOINTS
 # ============================================================================
@@ -164,6 +236,14 @@ async def root(
             </div>
 
             <div class="section">
+                <h2>Business Policies Setup</h2>
+                <button onclick="runTest('/check-optin-status')">Check Opt-in Status</button>
+                <button onclick="runTestPost('/optin-to-business-policies')">Opt-in to Business Policies</button>
+                <button class="test-btn" onclick="runTestPost('/create-all-policies')">Create All Required Policies</button>
+                <p style="font-size: 12px; color: #666;">Business policies are required to publish offers. Check your opt-in status, then create all policies.</p>
+            </div>
+
+            <div class="section">
                 <h2>Individual API Tests</h2>
                 <button onclick="runTest('/test-fulfillment-policies')">Test Fulfillment Policies</button>
                 <button onclick="runTest('/test-payment-policies')">Test Payment Policies</button>
@@ -203,6 +283,22 @@ async def root(
 
                 try {
                     const response = await fetch(endpoint);
+                    const data = await response.json();
+                    resultContent.textContent = JSON.stringify(data, null, 2);
+                } catch (error) {
+                    resultContent.textContent = 'Error: ' + error.message;
+                }
+            }
+
+            async function runTestPost(endpoint) {
+                const resultDiv = document.getElementById('result');
+                const resultContent = document.getElementById('result-content');
+
+                resultDiv.style.display = 'block';
+                resultContent.textContent = 'Running test...';
+
+                try {
+                    const response = await fetch(endpoint, { method: 'POST' });
                     const data = await response.json();
                     resultContent.textContent = JSON.stringify(data, null, 2);
                 } catch (error) {
@@ -343,8 +439,41 @@ async def test_all_endpoints():
             "details": f"Token available (length: {len(token)})"
         })
 
-        # Test 2: Create inventory location
-        log_test("2", "Creating inventory location")
+        # Test 2: Check and enable Business Policies opt-in
+        log_test("2", "Checking Business Policies opt-in status")
+        opted_in_programs = check_opted_in_programs()
+        is_opted_in = opted_in_programs and "SELLING_POLICY_MANAGEMENT" in opted_in_programs
+
+        if not is_opted_in:
+            log_test("2", "Not opted in to SELLING_POLICY_MANAGEMENT, attempting to opt-in", False)
+            opt_in_result = opt_in_to_selling_policies()
+            results["tests"].append({
+                "name": "Opt-in to Business Policies",
+                "status": "PASSED" if opt_in_result.get("success") else "WARNING",
+                "details": opt_in_result
+            })
+
+            if not opt_in_result.get("success"):
+                # Provide manual opt-in instructions
+                results["tests"].append({
+                    "name": "Manual Opt-in Required",
+                    "status": "WARNING",
+                    "details": {
+                        "message": "Please manually opt-in to Business Policies via the sandbox web page",
+                        "url": "http://www.bizpolicy.sandbox.ebay.com/businesspolicy/policyoptin",
+                        "instructions": "Visit the URL above, sign in with your sandbox account, and enable Business Policies. Then re-run this test."
+                    }
+                })
+        else:
+            log_test("2", "Already opted in to SELLING_POLICY_MANAGEMENT", True)
+            results["tests"].append({
+                "name": "Business Policies Opt-in Status",
+                "status": "PASSED",
+                "details": {"opted_in": True, "programs": opted_in_programs}
+            })
+
+        # Test 3: Create inventory location
+        log_test("3", "Creating inventory location")
         location_result = await test_inventory_location()
         results["tests"].append({
             "name": "Create Inventory Location",
@@ -355,8 +484,8 @@ async def test_all_endpoints():
         # Get headers for subsequent API calls
         headers = get_headers()
 
-        # Test 3: Create fulfillment policy (required for publishing offers)
-        log_test("3", "Creating fulfillment policy with shipping services")
+        # Test 4: Create fulfillment policy (required for publishing offers)
+        log_test("4", "Creating fulfillment policy with shipping services")
         fulfillment_policy_id = None
         try:
             fulfillment_payload = {
@@ -390,51 +519,63 @@ async def test_all_endpoints():
             if fulfillment_response.status_code in [200, 201]:
                 fulfillment_data = fulfillment_response.json()
                 fulfillment_policy_id = fulfillment_data.get("fulfillmentPolicyId")
-                log_test("3", f"Fulfillment policy created: {fulfillment_policy_id}", True)
+                log_test("4", f"Fulfillment policy created: {fulfillment_policy_id}", True)
                 results["tests"].append({
                     "name": "Create Fulfillment Policy",
                     "status": "PASSED",
                     "details": {"policyId": fulfillment_policy_id}
                 })
             else:
-                # Try to get existing policy
+                # Try to get existing policy (error 20400 means it already exists)
                 get_policies_url = f"{SANDBOX_ACCOUNT_BASE}/fulfillment_policy?marketplace_id=EBAY_US"
                 get_response = requests.get(get_policies_url, headers=headers)
                 if get_response.status_code == 200:
                     policies_data = get_response.json()
                     if policies_data.get("total", 0) > 0:
-                        fulfillment_policy_id = policies_data["fulfillmentPolicies"][0]["fulfillmentPolicyId"]
-                        log_test("3", f"Using existing fulfillment policy: {fulfillment_policy_id}", True)
-                        results["tests"].append({
-                            "name": "Create Fulfillment Policy",
-                            "status": "PASSED",
-                            "details": {"policyId": fulfillment_policy_id, "note": "Using existing policy"}
-                        })
+                        # Use the first policy that has shipping services
+                        for policy in policies_data.get("fulfillmentPolicies", []):
+                            if policy.get("shippingOptions") and len(policy["shippingOptions"]) > 0:
+                                fulfillment_policy_id = policy["fulfillmentPolicyId"]
+                                log_test("4", f"Using existing fulfillment policy with shipping services: {fulfillment_policy_id}", True)
+                                results["tests"].append({
+                                    "name": "Create Fulfillment Policy",
+                                    "status": "PASSED",
+                                    "details": {
+                                        "policyId": fulfillment_policy_id,
+                                        "note": "Using existing policy",
+                                        "policy_name": policy.get("name")
+                                    }
+                                })
+                                break
 
                 if not fulfillment_policy_id:
-                    log_test("3", f"Failed to create/get fulfillment policy: {fulfillment_response.text}", False)
+                    log_test("4", f"Failed to create/get fulfillment policy: {fulfillment_response.text}", False)
                     results["tests"].append({
                         "name": "Create Fulfillment Policy",
                         "status": "WARNING",
-                        "details": {"error": fulfillment_response.text}
+                        "details": {
+                            "error": fulfillment_response.text,
+                            "note": "Make sure you are opted in to Business Policies"
+                        }
                     })
         except Exception as e:
-            log_test("3", f"Fulfillment policy error: {str(e)}", False)
+            log_test("4", f"Fulfillment policy error: {str(e)}", False)
             results["tests"].append({
                 "name": "Create Fulfillment Policy",
                 "status": "WARNING",
                 "details": {"error": str(e)}
             })
 
-        # Test 4: Create payment policy (required for publishing offers)
-        log_test("4", "Creating payment policy")
+        # Test 5: Create payment policy (required for publishing offers)
+        log_test("5", "Creating payment policy")
         payment_policy_id = None
         try:
+            # For eBay Managed Payments, don't specify payment methods
             payment_payload = {
                 "name": "Test Payment Policy",
+                "description": "Standard payment policy for managed payments",
                 "marketplaceId": "EBAY_US",
                 "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
-                "paymentMethods": [{"paymentMethodType": "PAYPAL"}],
                 "immediatePay": False
             }
 
@@ -444,7 +585,7 @@ async def test_all_endpoints():
             if payment_response.status_code in [200, 201]:
                 payment_data = payment_response.json()
                 payment_policy_id = payment_data.get("paymentPolicyId")
-                log_test("4", f"Payment policy created: {payment_policy_id}", True)
+                log_test("5", f"Payment policy created: {payment_policy_id}", True)
                 results["tests"].append({
                     "name": "Create Payment Policy",
                     "status": "PASSED",
@@ -458,7 +599,7 @@ async def test_all_endpoints():
                     payment_data = get_response.json()
                     if payment_data.get("total", 0) > 0:
                         payment_policy_id = payment_data["paymentPolicies"][0]["paymentPolicyId"]
-                        log_test("4", f"Using existing payment policy: {payment_policy_id}", True)
+                        log_test("5", f"Using existing payment policy: {payment_policy_id}", True)
                         results["tests"].append({
                             "name": "Create Payment Policy",
                             "status": "PASSED",
@@ -468,7 +609,10 @@ async def test_all_endpoints():
                     results["tests"].append({
                         "name": "Create Payment Policy",
                         "status": "WARNING",
-                        "details": {"error": payment_response.text}
+                        "details": {
+                            "error": payment_response.text,
+                            "note": "Make sure you are opted in to Business Policies"
+                        }
                     })
         except Exception as e:
             results["tests"].append({
@@ -477,8 +621,8 @@ async def test_all_endpoints():
                 "details": {"error": str(e)}
             })
 
-        # Test 5: Create return policy (required for publishing offers)
-        log_test("5", "Creating return policy")
+        # Test 6: Create return policy (required for publishing offers)
+        log_test("6", "Creating return policy")
         return_policy_id = None
         try:
             return_payload = {
@@ -497,7 +641,7 @@ async def test_all_endpoints():
             if return_response.status_code in [200, 201]:
                 return_data = return_response.json()
                 return_policy_id = return_data.get("returnPolicyId")
-                log_test("5", f"Return policy created: {return_policy_id}", True)
+                log_test("6", f"Return policy created: {return_policy_id}", True)
                 results["tests"].append({
                     "name": "Create Return Policy",
                     "status": "PASSED",
@@ -511,7 +655,7 @@ async def test_all_endpoints():
                     return_data = get_response.json()
                     if return_data.get("total", 0) > 0:
                         return_policy_id = return_data["returnPolicies"][0]["returnPolicyId"]
-                        log_test("5", f"Using existing return policy: {return_policy_id}", True)
+                        log_test("6", f"Using existing return policy: {return_policy_id}", True)
                         results["tests"].append({
                             "name": "Create Return Policy",
                             "status": "PASSED",
@@ -521,7 +665,10 @@ async def test_all_endpoints():
                     results["tests"].append({
                         "name": "Create Return Policy",
                         "status": "WARNING",
-                        "details": {"error": return_response.text}
+                        "details": {
+                            "error": return_response.text,
+                            "note": "Make sure you are opted in to Business Policies"
+                        }
                     })
         except Exception as e:
             results["tests"].append({
@@ -530,8 +677,8 @@ async def test_all_endpoints():
                 "details": {"error": str(e)}
             })
 
-        # Test 6: Create inventory item
-        log_test("6", f"Creating inventory item with SKU: {test_sku}")
+        # Test 7: Create inventory item
+        log_test("7", f"Creating inventory item with SKU: {test_sku}")
         inventory_payload = {
             "availability": {
                 "shipToLocationAvailability": {
@@ -546,7 +693,10 @@ async def test_all_endpoints():
                     "https://i.ebayimg.com/images/g/T~0AAOSwf6RkP3aI/s-l1600.jpg"
                 ],
                 "brand": "GoPro",
-                "mpn": "HERO4BLACK"  # Required: Manufacturer Part Number paired with brand
+                "mpn": "HERO4BLACK",  # Required: Manufacturer Part Number paired with brand
+                "aspects": {
+                    "Model": ["Hero 4 Black"]  # Required for category 31388 (Cameras & Photo)
+                }
             }
         }
 
@@ -554,43 +704,43 @@ async def test_all_endpoints():
         inventory_response = requests.put(inventory_url, headers=headers, json=inventory_payload)
 
         if inventory_response.status_code in [200, 201, 204]:
-            log_test("6", "Inventory item created successfully", True)
+            log_test("7", "Inventory item created successfully", True)
             results["tests"].append({
                 "name": "Create Inventory Item",
                 "status": "PASSED",
                 "details": {"sku": test_sku, "status_code": inventory_response.status_code}
             })
         else:
-            log_test("6", f"Failed to create inventory item: {inventory_response.text}", False)
+            log_test("7", f"Failed to create inventory item: {inventory_response.text}", False)
             results["tests"].append({
                 "name": "Create Inventory Item",
                 "status": "FAILED",
                 "details": {"error": inventory_response.text}
             })
 
-        # Test 7: Get inventory item
-        log_test("7", f"Getting inventory item details for SKU: {test_sku}")
+        # Test 8: Get inventory item
+        log_test("8", f"Getting inventory item details for SKU: {test_sku}")
         get_inventory_url = f"{SANDBOX_INVENTORY_BASE}/inventory_item/{test_sku}"
         get_inventory_response = requests.get(get_inventory_url, headers=headers)
 
         if get_inventory_response.status_code == 200:
             item_data = get_inventory_response.json()
-            log_test("7", "Retrieved inventory item successfully", True)
+            log_test("8", "Retrieved inventory item successfully", True)
             results["tests"].append({
                 "name": "Get Inventory Item",
                 "status": "PASSED",
                 "details": item_data
             })
         else:
-            log_test("7", f"Failed to get inventory item: {get_inventory_response.text}", False)
+            log_test("8", f"Failed to get inventory item: {get_inventory_response.text}", False)
             results["tests"].append({
                 "name": "Get Inventory Item",
                 "status": "FAILED",
                 "details": {"error": get_inventory_response.text}
             })
 
-        # Test 8: Create offer
-        log_test("8", "Creating offer for inventory item")
+        # Test 9: Create offer
+        log_test("9", "Creating offer for inventory item")
         offer_payload = {
             "sku": test_sku,
             "marketplaceId": "EBAY_US",
@@ -607,36 +757,35 @@ async def test_all_endpoints():
             }
         }
 
-        # Add policies if they were created successfully
+        # Add policies - ALL THREE ARE REQUIRED to publish offers via Inventory API
         if fulfillment_policy_id and payment_policy_id and return_policy_id:
             offer_payload["listingPolicies"] = {
                 "fulfillmentPolicyId": fulfillment_policy_id,
                 "paymentPolicyId": payment_policy_id,
                 "returnPolicyId": return_policy_id
             }
-            log_test("8", "Adding business policies to offer", True)
+            log_test("9", "Adding business policies to offer", True)
         else:
-            # Fallback shipping data when Business Policies API is unavailable for the seller account.
-            offer_payload["shippingOptions"] = [{
-                "optionType": "DOMESTIC",
-                "costType": "FLAT_RATE",
-                "shippingServices": [{
-                    "sortOrderId": 1,
-                    "shippingServiceCode": "USPSPriorityFlatRateEnvelope",
-                    "shippingCost": {
-                        "value": "0.00",
-                        "currency": "USD"
-                    },
-                    "shippingCostType": "FLAT_RATE",
-                    "freeShipping": True
-                }]
-            }]
-            offer_payload["shipToLocations"] = {
-                "regionIncluded": [
-                    {"regionName": "UNITED_STATES"}
-                ]
-            }
-            log_test("8", "Applying inline shipping options fallback", True)
+            # Business policies are REQUIRED for publishing offers via Inventory API
+            # Inline shipping options alone will NOT work for publishing
+            missing_policies = []
+            if not fulfillment_policy_id:
+                missing_policies.append("fulfillment")
+            if not payment_policy_id:
+                missing_policies.append("payment")
+            if not return_policy_id:
+                missing_policies.append("return")
+
+            log_test("9", f"WARNING: Missing required policies: {', '.join(missing_policies)}", False)
+            results["tests"].append({
+                "name": "Policy Validation",
+                "status": "WARNING",
+                "details": {
+                    "missing_policies": missing_policies,
+                    "message": "All three business policies (fulfillment, payment, return) are REQUIRED to publish offers",
+                    "solution": "Ensure you are opted in to Business Policies and all three policies are created successfully"
+                }
+            })
 
         offer_url = f"{SANDBOX_INVENTORY_BASE}/offer"
         offer_response = requests.post(offer_url, headers=headers, json=offer_payload)
@@ -645,45 +794,45 @@ async def test_all_endpoints():
         if offer_response.status_code in [200, 201]:
             offer_data = offer_response.json()
             offer_id = offer_data.get("offerId")
-            log_test("8", f"Offer created successfully: {offer_id}", True)
+            log_test("9", f"Offer created successfully: {offer_id}", True)
             results["tests"].append({
                 "name": "Create Offer",
                 "status": "PASSED",
                 "details": offer_data
             })
         else:
-            log_test("8", f"Failed to create offer: {offer_response.text}", False)
+            log_test("9", f"Failed to create offer: {offer_response.text}", False)
             results["tests"].append({
                 "name": "Create Offer",
                 "status": "FAILED",
                 "details": {"error": offer_response.text}
             })
 
-        # Test 9: Get offer details
+        # Test 10: Get offer details
         if offer_id:
-            log_test("9", f"Getting offer details for offer ID: {offer_id}")
+            log_test("10", f"Getting offer details for offer ID: {offer_id}")
             get_offer_url = f"{SANDBOX_INVENTORY_BASE}/offer/{offer_id}"
             get_offer_response = requests.get(get_offer_url, headers=headers)
 
             if get_offer_response.status_code == 200:
                 offer_details = get_offer_response.json()
-                log_test("9", "Retrieved offer details successfully", True)
+                log_test("10", "Retrieved offer details successfully", True)
                 results["tests"].append({
                     "name": "Get Offer Details",
                     "status": "PASSED",
                     "details": offer_details
                 })
             else:
-                log_test("9", f"Failed to get offer details: {get_offer_response.text}", False)
+                log_test("10", f"Failed to get offer details: {get_offer_response.text}", False)
                 results["tests"].append({
                     "name": "Get Offer Details",
                     "status": "FAILED",
                     "details": {"error": get_offer_response.text}
                 })
 
-        # Test 10: Publish offer
+        # Test 11: Publish offer
         if offer_id:
-            log_test("10", f"Publishing offer: {offer_id}")
+            log_test("11", f"Publishing offer: {offer_id}")
             publish_url = f"{SANDBOX_INVENTORY_BASE}/offer/{offer_id}/publish"
             publish_response = requests.post(publish_url, headers=headers)
 
@@ -691,7 +840,7 @@ async def test_all_endpoints():
             if publish_response.status_code == 200:
                 listing_data = publish_response.json()
                 listing_id = listing_data.get("listingId")
-                log_test("10", f"Offer published successfully. Listing ID: {listing_id}", True)
+                log_test("11", f"Offer published successfully. Listing ID: {listing_id}", True)
                 results["tests"].append({
                     "name": "Publish Offer",
                     "status": "PASSED",
@@ -702,43 +851,46 @@ async def test_all_endpoints():
                     }
                 })
             else:
-                log_test("10", f"Failed to publish offer: {publish_response.text}", False)
+                log_test("11", f"Failed to publish offer: {publish_response.text}", False)
                 results["tests"].append({
                     "name": "Publish Offer",
                     "status": "FAILED",
-                    "details": {"error": publish_response.text}
+                    "details": {
+                        "error": publish_response.text,
+                        "hint": "Ensure all three business policies are properly configured and the account is opted in to Business Policies"
+                    }
                 })
 
-        # Test 11: Get all inventory items
-        log_test("11", "Getting all inventory items")
+        # Test 12: Get all inventory items
+        log_test("12", "Getting all inventory items")
         all_inventory_url = f"{SANDBOX_INVENTORY_BASE}/inventory_item"
         all_inventory_response = requests.get(all_inventory_url, headers=headers)
 
         if all_inventory_response.status_code == 200:
             all_items = all_inventory_response.json()
-            log_test("11", f"Retrieved {all_items.get('total', 0)} inventory items", True)
+            log_test("12", f"Retrieved {all_items.get('total', 0)} inventory items", True)
             results["tests"].append({
                 "name": "Get All Inventory Items",
                 "status": "PASSED",
                 "details": {"total": all_items.get("total", 0), "items": all_items.get("inventoryItems", [])}
             })
         else:
-            log_test("11", f"Failed to get inventory items: {all_inventory_response.text}", False)
+            log_test("12", f"Failed to get inventory items: {all_inventory_response.text}", False)
             results["tests"].append({
                 "name": "Get All Inventory Items",
                 "status": "FAILED",
                 "details": {"error": all_inventory_response.text}
             })
 
-        # Test 12: Get offers for specific SKU
+        # Test 13: Get offers for specific SKU
         # Note: We query by SKU to avoid error 25707 from old inventory items with invalid SKU formats
-        log_test("12", f"Getting offers for SKU: {test_sku}")
+        log_test("13", f"Getting offers for SKU: {test_sku}")
         sku_offers_url = f"{SANDBOX_INVENTORY_BASE}/offer?sku={test_sku}"
         sku_offers_response = requests.get(sku_offers_url, headers=headers)
 
         if sku_offers_response.status_code == 200:
             sku_offers = sku_offers_response.json()
-            log_test("12", f"Retrieved {sku_offers.get('total', 0)} offers for SKU", True)
+            log_test("13", f"Retrieved {sku_offers.get('total', 0)} offers for SKU", True)
             results["tests"].append({
                 "name": "Get Offers by SKU",
                 "status": "PASSED",
@@ -750,7 +902,7 @@ async def test_all_endpoints():
                 }
             })
         else:
-            log_test("12", f"Failed to get offers: {sku_offers_response.text}", False)
+            log_test("13", f"Failed to get offers: {sku_offers_response.text}", False)
             results["tests"].append({
                 "name": "Get Offers by SKU",
                 "status": "FAILED",
@@ -930,6 +1082,195 @@ async def test_return_policies():
         return {"success": False, "error": str(e)}
 
 
+@app.get("/check-optin-status")
+async def check_optin_status_endpoint():
+    """
+    Check if the account is opted in to SELLING_POLICY_MANAGEMENT.
+    This is required to create and use business policies.
+    """
+    try:
+        programs = check_opted_in_programs()
+
+        if programs is None:
+            return {
+                "success": False,
+                "message": "Failed to check opt-in status",
+                "error": "Unable to retrieve opted-in programs from eBay API"
+            }
+
+        is_opted_in = "SELLING_POLICY_MANAGEMENT" in programs
+
+        return {
+            "success": True,
+            "opted_in_to_business_policies": is_opted_in,
+            "all_programs": programs,
+            "message": "Opted in to Business Policies" if is_opted_in else "NOT opted in to Business Policies",
+            "manual_optin_url": "http://www.bizpolicy.sandbox.ebay.com/businesspolicy/policyoptin" if not is_opted_in else None
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/optin-to-business-policies")
+async def optin_to_business_policies_endpoint():
+    """
+    Opt-in to SELLING_POLICY_MANAGEMENT program.
+    This is required to create and use business policies (fulfillment, payment, return).
+    """
+    try:
+        # First check if already opted in
+        programs = check_opted_in_programs()
+        if programs and "SELLING_POLICY_MANAGEMENT" in programs:
+            return {
+                "success": True,
+                "already_opted_in": True,
+                "message": "Already opted in to SELLING_POLICY_MANAGEMENT"
+            }
+
+        # Attempt to opt-in
+        result = opt_in_to_selling_policies()
+        return result
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "manual_optin_url": "http://www.bizpolicy.sandbox.ebay.com/businesspolicy/policyoptin"
+        }
+
+
+@app.post("/create-all-policies")
+async def create_all_policies_endpoint():
+    """
+    Create all three required business policies: Fulfillment, Payment, and Return.
+    This will check existing policies and only create the ones that are missing.
+    """
+    try:
+        headers = get_headers()
+        results = {
+            "fulfillment": {"exists": False, "policy_id": None},
+            "payment": {"exists": False, "policy_id": None},
+            "return": {"exists": False, "policy_id": None}
+        }
+
+        # Check and create Fulfillment Policy
+        get_fulfillment_url = f"{SANDBOX_ACCOUNT_BASE}/fulfillment_policy?marketplace_id=EBAY_US"
+        fulfillment_response = requests.get(get_fulfillment_url, headers=headers)
+
+        if fulfillment_response.status_code == 200:
+            fulfillment_data = fulfillment_response.json()
+            if fulfillment_data.get("total", 0) > 0:
+                # Use existing policy with shipping services
+                for policy in fulfillment_data.get("fulfillmentPolicies", []):
+                    if policy.get("shippingOptions") and len(policy["shippingOptions"]) > 0:
+                        results["fulfillment"]["exists"] = True
+                        results["fulfillment"]["policy_id"] = policy["fulfillmentPolicyId"]
+                        results["fulfillment"]["name"] = policy.get("name")
+                        break
+
+        if not results["fulfillment"]["exists"]:
+            # Create new fulfillment policy
+            fulfillment_payload = {
+                "name": "Standard Shipping Policy",
+                "description": "Standard domestic shipping",
+                "marketplaceId": "EBAY_US",
+                "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+                "handlingTime": {"unit": "DAY", "value": 1},
+                "localPickup": False,
+                "freightShipping": False,
+                "shippingOptions": [{
+                    "optionType": "DOMESTIC",
+                    "costType": "FLAT_RATE",
+                    "shippingServices": [{
+                        "shippingServiceCode": "USPSPriority",
+                        "freeShipping": True,
+                        "shippingCost": {"currency": "USD", "value": "0.00"}
+                    }]
+                }]
+            }
+            create_response = requests.post(f"{SANDBOX_ACCOUNT_BASE}/fulfillment_policy", headers=headers, json=fulfillment_payload)
+            if create_response.status_code in [200, 201]:
+                data = create_response.json()
+                results["fulfillment"]["created"] = True
+                results["fulfillment"]["policy_id"] = data.get("fulfillmentPolicyId")
+
+        # Check and create Payment Policy
+        get_payment_url = f"{SANDBOX_ACCOUNT_BASE}/payment_policy?marketplace_id=EBAY_US"
+        payment_response = requests.get(get_payment_url, headers=headers)
+
+        if payment_response.status_code == 200:
+            payment_data = payment_response.json()
+            if payment_data.get("total", 0) > 0:
+                results["payment"]["exists"] = True
+                results["payment"]["policy_id"] = payment_data["paymentPolicies"][0]["paymentPolicyId"]
+                results["payment"]["name"] = payment_data["paymentPolicies"][0].get("name")
+
+        if not results["payment"]["exists"]:
+            # Create new payment policy for Managed Payments
+            # Note: eBay Managed Payments accounts don't require specifying payment methods
+            payment_payload = {
+                "name": "Standard Payment Policy",
+                "description": "Standard payment policy for managed payments",
+                "marketplaceId": "EBAY_US",
+                "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+                "immediatePay": False
+            }
+            create_response = requests.post(f"{SANDBOX_ACCOUNT_BASE}/payment_policy", headers=headers, json=payment_payload)
+            if create_response.status_code in [200, 201]:
+                data = create_response.json()
+                results["payment"]["created"] = True
+                results["payment"]["policy_id"] = data.get("paymentPolicyId")
+            else:
+                results["payment"]["error"] = create_response.text
+
+        # Check and create Return Policy
+        get_return_url = f"{SANDBOX_ACCOUNT_BASE}/return_policy?marketplace_id=EBAY_US"
+        return_response = requests.get(get_return_url, headers=headers)
+
+        if return_response.status_code == 200:
+            return_data = return_response.json()
+            if return_data.get("total", 0) > 0:
+                results["return"]["exists"] = True
+                results["return"]["policy_id"] = return_data["returnPolicies"][0]["returnPolicyId"]
+                results["return"]["name"] = return_data["returnPolicies"][0].get("name")
+
+        if not results["return"]["exists"]:
+            # Create new return policy
+            return_payload = {
+                "name": "Standard Return Policy",
+                "description": "Standard return policy",
+                "marketplaceId": "EBAY_US",
+                "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+                "returnsAccepted": True,
+                "returnPeriod": {"unit": "DAY", "value": 30},
+                "refundMethod": "MONEY_BACK",
+                "returnShippingCostPayer": "BUYER"
+            }
+            create_response = requests.post(f"{SANDBOX_ACCOUNT_BASE}/return_policy", headers=headers, json=return_payload)
+            if create_response.status_code in [200, 201]:
+                data = create_response.json()
+                results["return"]["created"] = True
+                results["return"]["policy_id"] = data.get("returnPolicyId")
+            else:
+                results["return"]["error"] = create_response.text
+
+        # Check if all policies are available
+        all_ready = (results["fulfillment"]["policy_id"] and
+                     results["payment"]["policy_id"] and
+                     results["return"]["policy_id"])
+
+        return {
+            "success": all_ready,
+            "message": "All policies ready" if all_ready else "Some policies are missing",
+            "policies": results,
+            "ready_to_publish": all_ready
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @app.get("/test-policies")
 async def test_policies():
     """Test all policy endpoints together"""
@@ -962,7 +1303,10 @@ async def test_inventory_operations():
                 "description": "Testing inventory operations",
                 "imageUrls": ["https://i.ebayimg.com/images/g/T~0AAOSwf6RkP3aI/s-l1600.jpg"],
                 "brand": "Generic",
-                "mpn": "TESTMPN001"
+                "mpn": "TESTMPN001",
+                "aspects": {
+                    "Model": ["Test Model"]
+                }
             }
         }
 
@@ -1029,7 +1373,10 @@ async def test_create_listing():
                 "description": "Quick test listing",
                 "imageUrls": ["https://i.ebayimg.com/images/g/T~0AAOSwf6RkP3aI/s-l1600.jpg"],
                 "brand": "TestBrand",
-                "mpn": "QT12345"
+                "mpn": "QT12345",
+                "aspects": {
+                    "Model": ["Quick Test Model"]
+                }
             }
         }
 
@@ -1211,13 +1558,21 @@ if __name__ == "__main__":
     print(f"   1. Open browser: {PUBLIC_URL}")
     print("   2. Click 'Start OAuth Authorization'")
     print("   3. Sign in with eBay Sandbox account")
-    print("   4. Run comprehensive tests!")
+    print("   4. Check Business Policies opt-in status")
+    print("   5. Opt-in to Business Policies if needed")
+    print("   6. Run comprehensive tests!")
     print("\n🧪 Test Endpoints:")
     print("   GET  /test-all                    - Run all tests")
+    print("   GET  /check-optin-status          - Check Business Policies opt-in")
+    print("   POST /optin-to-business-policies  - Opt-in to Business Policies")
+    print("   POST /create-all-policies         - Create all required policies")
     print("   GET  /test-inventory-location     - Test location APIs")
     print("   GET  /test-create-listing         - Test listing creation")
     print("   GET  /test-get-listing            - Test listing retrieval")
     print("   GET  /test-policies               - Test policy APIs")
     print("   GET  /test-inventory-operations   - Test inventory CRUD")
+    print("\n⚠️  IMPORTANT:")
+    print("   Business Policies opt-in is REQUIRED to publish offers!")
+    print("   Use /create-all-policies to create missing Payment Policy")
     print("\n" + "="*70 + "\n")
     uvicorn.run(app, host="0.0.0.0", port=8000)
