@@ -267,6 +267,13 @@ async def buyer_accept_negotiation(negotiation_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/listings")
+async def create_listing(name: str, description: str, price: float):
+    """Mock endpoint to create a listing (for testing)."""
+
+    print(f"Creating listing: {name}, {description}, {price}")
+    return {"status": "success", "id": "listing-123"}
+
 # ============ SELLER ENDPOINTS ============
 
 @app.get("/api/seller/{seller_id}/negotiations")
