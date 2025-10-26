@@ -1,12 +1,31 @@
+import sys
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 import sqlite3
 import json
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Tetsy - Negotiation Backend")
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    """Log validation errors in detail."""
+    logger.error(f"Validation Error: {exc}")
+    logger.error(f"Request URL: {request.url}")
+    logger.error(f"Request Query: {request.query_params}")
+    logger.error(f"Errors: {exc.errors()}")
+    return JSONResponse(
+        status_code=422,
+        content={"status": "error", "detail": exc.errors()}
+    )
 
 # Mock buyer ID (single user)
 BUYER_ID = "buyer-001"
@@ -270,9 +289,18 @@ async def buyer_accept_negotiation(negotiation_id: str):
 @app.post("/api/listings")
 async def create_listing(name: str, description: str, price: float):
     """Mock endpoint to create a listing (for testing)."""
-
-    print(f"Creating listing: {name}, {description}, {price}")
+    import sys
+    print(f"Creating listing: name={name}, description={description}, price={price}", file=sys.stderr)
+    print(f"Creating listing: name={name}, description={description}, price={price}")
     return {"status": "success", "id": "listing-123"}
+
+@app.exception_handler(Exception)
+async def exception_handler(request, exc):
+    """Catch and log all exceptions."""
+    import traceback
+    print(f"Exception: {exc}", file=sys.stderr)
+    traceback.print_exc()
+    raise
 
 # ============ SELLER ENDPOINTS ============
 

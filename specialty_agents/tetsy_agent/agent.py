@@ -1,85 +1,48 @@
-'''
-Define the Core and Capability of Tetsy specialty agent.
-'''
+from google.adk.tools import FunctionTool
+from google.adk.agents.llm_agent import Agent
+import httpx
 
-
-import os
-import logging
-from google.adk.agents import Agent # Or LangGraph, etc.
-from google.adk.models import Gemini # Or another model provider
-
-# --- A2A SDK Imports ---
-from a2a.types import AgentCard, AgentSkill, AgentCapabilities, TransportProtocol
-
-# --- Import the ACTUAL tool functions ---
-from .tools.tetsy_api import post_listing_to_tetsy, check_tetsy_notifications
-
-logger = logging.getLogger(__name__)
-
-
-def create_tetsy_agent_card(host: str = "0.0.0.0", port: int = 10001) -> AgentCard:
-    """
-    Create the A2A AgentCard for the Tetsy Agent.
+async def post_listing_to_tetsy(name: str, description: str, price: float) -> str:
+    """Post a new listing to Tetsy."""
+    import logging
+    logger = logging.getLogger(__name__)
     
-    Args:
-        host: The host the agent server is running on
-        port: The port the agent server is running on
+    logger.info(f"Posting listing: name={name}, description={description}, price={price}")
     
-    Returns:
-        AgentCard: The card describing this agent to the A2A protocol
-    """
-    app_url = os.environ.get('APP_URL', f'http://{host}:{port}')
-    
-    skill = AgentSkill(
-        id='tetsy_posting',
-        name='Post to Tetsy',
-        description='Creates product listings on the Tetsy platform.',
-        tags=['tetsy', 'listing', 'e-commerce'],
-        examples=['Post my blue scarf on Tetsy for $20'],
-    )
-    
-    capabilities = AgentCapabilities(streaming=False)
-    
-    agent_card = AgentCard(
-        name='Tetsy Agent',
-        description='Handles posting listings and checking notifications specifically for Tetsy.',
-        url=app_url,
-        version='1.0.0',
-        capabilities=capabilities,
-        skills=[skill],
-        defaultInputModes=[TransportProtocol.http_json],
-        defaultOutputModes=[TransportProtocol.http_json],
-    )
-    
-    return agent_card
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                "http://localhost:8050/api/listings",
+                params={"name": name, "description": description, "price": str(price)}
+            )
+            logger.info(f"Response status: {response.status_code}")
+            logger.info(f"Response text: {response.text}")
+            response.raise_for_status()
+            return f"Successfully posted listing: {response.json()}"
+        except Exception as e:
+            logger.error(f"Error posting listing: {e}")
+            raise
 
+async def check_tetsy_notifications(listing_id: str) -> str:
+    """Check notifications for a listing."""
+    return f"Checked listing {listing_id}"
 
-# --- Function to create the Tetsy Agent instance ---
-def create_tetsy_agent() -> Agent:
-    """Constructs the ADK agent specifically for Tetsy tasks."""
-    llm_model_name = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
+root_agent = Agent(
+    model='gemini-2.5-flash',
+    name='tetsy_agent',
+    description='Posts listings to Tetsy',
+    instruction='''You are a Tetsy listing agent. Your job is to help users post listings on Tetsy.
 
-    # --- The System Prompt (Instructions) ---
-    tetsy_instructions = """
-    **Role:** You are a specialized agent for the Tetsy platform.
-    **Goal:** Your ONLY job is to post new listings and check notifications on Tetsy using the provided tools.
-    **Tools:**
-    * `post_listing_to_tetsy`: Use this to create a new product listing. You need item name, description, and price.
-    * `check_tetsy_notifications`: Use this to check for updates (like sales or offers) on a specific listing ID.
-    **Rules:**
-    * ONLY use the provided tools. Do not make up information or try to perform actions you don't have tools for.
-    * If you need more information (e.g., missing price), ask the user clearly.
-    * Confirm success or failure after using a tool.
-    """
+You have ONE tool available: post_listing_to_tetsy(name, description, price)
 
-    return Agent(
-        model=Gemini(model=llm_model_name), # Configure the LLM
-        name='TetsyAgent',
-        description='An agent that posts listings and checks notifications on the Tetsy platform.',
-        instruction=tetsy_instructions, # Set the specific instructions
-        # --- List the tools this agent can use ---
-        tools=[
-            post_listing_to_tetsy,
-            check_tetsy_notifications,
-        ],
-    ) # Analogous to 
+When the user asks to post something, you MUST call this tool with:
+- name: the item name
+- description: the item description  
+- price: the price as a float
+
+Always call the tool when asked to post a listing. Extract the name, description, and price from the user's request and pass them to the tool.''',
+    tools=[
+        FunctionTool(post_listing_to_tetsy),
+        FunctionTool(check_tetsy_notifications),
+    ],
+)
