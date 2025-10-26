@@ -55,49 +55,79 @@ async def health_check():
     return {"status": "healthy"}
 
 
-@app.post("/api/process-image-upload")
-async def process_image_upload(image: UploadFile = File(...)):
-    """Process image upload from step 1 - forwards to agent"""
-    print(f"Image uploaded: {image.filename}")
+@app.post("/api/analyze-product-image")
+async def analyze_product_image(image: UploadFile = File(...)):
+    """Analyze product image and extract details using Gemini"""
+    print(f"Image uploaded for analysis: {image.filename}")
     print(f"Content type: {image.content_type}")
 
     try:
         # Read the image data
         image_data = await image.read()
 
-        # Reset file pointer for potential reuse
-        await image.seek(0)
+        # Encode image to base64 for Gemini
+        image_base64 = base64.b64encode(image_data).decode('utf-8')
 
-        # Forward to the agent endpoint
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            files = {"file": (image.filename, image_data, image.content_type)}
-            data = {"user_query": "Describe this image and extract product details."}
+        # Use Gemini directly to analyze the image
+        import google.generativeai as genai
+        import os
+        import json
 
-            response = await client.post(
-                "http://localhost:8002/process_image_upload",
-                files=files,
-                data=data
-            )
+        # Configure Gemini
+        genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
 
-            if response.status_code != 200:
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"Agent processing failed: {response.text}"
-                )
+        # Create prompt for product detail extraction
+        prompt = """Analyze this product image and extract the following details in JSON format:
+        {
+            "name": "product name",
+            "description": "detailed product description",
+            "price": "estimated price in USD (just the number, no currency symbol)",
+            "quantity": "1",
+            "brand": "brand name if visible, otherwise 'Unknown'"
+        }
 
-            agent_response = response.json()
-            print(f"Agent response: {agent_response}")
-            return agent_response
+        Important:
+        - For price, provide a reasonable estimate based on the product type and condition
+        - For quantity, default to "1" unless multiple items are clearly visible
+        - For brand, look for logos, text, or distinctive features
+        - Provide a detailed description including color, condition, and notable features
 
-    except httpx.ConnectError:
-        raise HTTPException(
-            status_code=503,
-            detail="Agent service unavailable. Make sure my_agent is running on port 8002."
-        )
-    except Exception as e:
+        Return ONLY valid JSON, no additional text."""
+
+        # Send to Gemini
+        response = model.generate_content([
+            prompt,
+            {"mime_type": f"image/{image.content_type.split('/')[-1]}", "data": image_base64}
+        ])
+
+        # Parse response
+        response_text = response.text.strip()
+
+        # Remove markdown code blocks if present
+        if response_text.startswith('```'):
+            response_text = response_text.split('```')[1]
+            if response_text.startswith('json'):
+                response_text = response_text[4:]
+            response_text = response_text.strip()
+
+        product_details = json.loads(response_text)
+        print(f"Extracted product details: {product_details}")
+
+        return product_details
+
+    except json.JSONDecodeError as e:
+        print(f"JSON parsing error: {e}")
+        print(f"Response text: {response_text}")
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing image: {str(e)}"
+            detail=f"Failed to parse product details from image analysis"
+        )
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error analyzing image: {str(e)}"
         )
 
 

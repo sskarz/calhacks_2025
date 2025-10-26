@@ -47,3 +47,23 @@ export async function createListing(formData: FormData): Promise<Listing> {
   return response.data;
 }
 
+export interface ProductAnalysis {
+  name: string;
+  description: string;
+  price: string;
+  quantity: string;
+  brand: string;
+}
+
+export async function analyzeProductImage(imageFile: File): Promise<ProductAnalysis> {
+  const formData = new FormData();
+  formData.append('image', imageFile);
+
+  const response = await api.post('/analyze-product-image', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+  return response.data;
+}
+
