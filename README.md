@@ -1,13 +1,21 @@
 
-# CalHacks 2025 - ASAP: A2A-Powered Multi-Platform E-Commerce  System
+# CalHacks 2025 
+
+## ASAP: A2A Powered Multi-Platform E-Commerce  System
+
+- Sanskar Thapa
+- Damarrion (DIIZZY) Morgan-Harper
+- Joshua Soteras 
 
 An intelligent e-commerce orchestration platform that uses Google ADK (Anthropic Developers Kit) agents to automatically create, manage, and negotiate product listings across multiple marketplaces (eBay and Tetsy).
 
 ## Features
 
+### Skillfully using Google's Agent 2 Agent (A2A) Protocol
+
+- **Intelligent Agent Orchestration**: Multi-agent system with specialized agents for each platform
 - **AI-Powered Product Analysis**: Upload product images and automatically extract details using Google Gemini AI
 - **Multi-Platform Listing**: Seamlessly create listings on eBay and Tetsy from a single interface
-- **Intelligent Agent Orchestration**: Multi-agent system with specialized agents for each platform
 - **Automated Price Negotiation**: AI agents handle buyer-seller negotiations on Tetsy with intelligent pricing strategies
 - **Real-Time Dashboard**: WebSocket-powered live updates of all listings
 - **Unified Management**: Track and manage inventory across all platforms in one place
