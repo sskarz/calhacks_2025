@@ -1,9 +1,10 @@
 import sys
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, WebSocket, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+import httpx
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 from datetime import datetime
 import sqlite3
@@ -83,6 +84,19 @@ def init_db():
             FOREIGN KEY (negotiation_id) REFERENCES negotiations(id)
         )
     ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS listings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            price REAL NOT NULL,
+            seller_id TEXT NOT NULL,
+            image BLOB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     
     conn.commit()
     conn.close()
@@ -108,10 +122,16 @@ class SellerOfferResponse(BaseModel):
 class StartNegotiationRequest(BaseModel):
     product_id: str = Field(..., alias="productId")
     product_title: str = Field(..., alias="productTitle")
-    product_image: str = Field(..., alias="productImage")
+    product_image: Optional[str] = Field(None, alias="productImage")  # Make it optional
     seller_id: str = Field(..., alias="sellerId")
     offer_amount: float = Field(..., alias="offerAmount")
     message: Optional[str] = None
+    
+    @field_validator('product_id', mode='before')
+    @classmethod
+    def convert_product_id(cls, v):
+        """Convert product_id to string if it's a number."""
+        return str(v)
     
     class Config:
         populate_by_name = True
@@ -220,6 +240,18 @@ async def start_negotiation(request: StartNegotiationRequest):
         
         conn.commit()
         conn.close()
+
+        #call agent webhook
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                "http://localhost:10001/webhook/message",
+                json={
+                    "negotiation_id": negotiation_id,
+                    "sender_id": BUYER_ID,
+                    "content": request.message or f"I'd like to offer ${request.offer_amount:.2f} for this item.",
+                    "offer_amount": request.offer_amount
+                }
+            )
         
         return {"status": "success", "negotiation_id": negotiation_id}
     except Exception as e:
@@ -262,6 +294,18 @@ async def send_message(negotiation_id: str, request: SendMessageRequest):
         
         conn.commit()
         conn.close()
+
+        #call agent webhook
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                "http://localhost:10001/webhook/message",
+                json={
+                    "negotiation_id": negotiation_id,
+                    "sender_id": BUYER_ID,
+                    "content": request.content,
+                    "offer_amount": request.offer_amount
+                }
+            )
         
         return {"status": "success"}
     except Exception as e:
@@ -287,12 +331,33 @@ async def buyer_accept_negotiation(negotiation_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/listings")
-async def create_listing(name: str, description: str, price: float):
-    """Mock endpoint to create a listing (for testing)."""
-    import sys
-    print(f"Creating listing: name={name}, description={description}, price={price}", file=sys.stderr)
-    print(f"Creating listing: name={name}, description={description}, price={price}")
-    return {"status": "success", "id": "listing-123"}
+async def create_listing(
+    name: str = Query(...),
+    description: str = Query(...),
+    price: float = Query(...),
+    seller_id: str = Query(...),
+    image: bytes = None
+):
+    """Create a listing endpoint that accepts query parameters."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        INSERT INTO listings (name, description, price, seller_id, image)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (
+        name,
+        description,
+        price,
+        seller_id,
+        image
+    ))
+
+    conn.commit()
+    listing_id = cursor.lastrowid
+    conn.close()
+
+    return {"status": "success", "id": f"listing-{listing_id}"}
 
 @app.exception_handler(Exception)
 async def exception_handler(request, exc):
@@ -501,6 +566,19 @@ async def get_unread_count(seller_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/listing")
+async def get_listing():
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM listings")
+        listings = cursor.fetchall()
+        conn.close()
+
+        return listings
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

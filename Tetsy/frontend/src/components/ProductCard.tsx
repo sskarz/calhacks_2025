@@ -4,10 +4,10 @@ import { DollarSign } from "lucide-react";
 
 export interface Product {
   id: string;
-  title: string;
+  name: string;
   price: number;
   image: string;
-  seller: string;
+  seller_id: string;
   description: string;
 }
 
@@ -22,15 +22,15 @@ const ProductCard = ({ product, onMakeOffer }: ProductCardProps) => {
       <div className="aspect-square overflow-hidden bg-muted">
         <img
           src={product.image}
-          alt={product.title}
+          alt={product.name}
           className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
         />
       </div>
       <CardContent className="p-4">
         <h3 className="font-semibold text-foreground line-clamp-1 mb-1">
-          {product.title}
+          {product.name}
         </h3>
-        <p className="text-sm text-muted-foreground mb-2">by {product.seller}</p>
+        <p className="text-sm text-muted-foreground mb-2">by {product.seller_id}</p>
         <div className="flex items-center gap-1 text-lg font-bold text-primary">
           <DollarSign className="h-5 w-5" />
           {product.price.toFixed(2)}

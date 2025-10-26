@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { Listing } from '@/types/listing';
 
 export const api = axios.create({
   baseURL: 'http://localhost:8000/api'
@@ -35,4 +36,14 @@ export const wsManager = {
     this.ws?.close();
   }
 };
+
+// Listing API endpoints
+export async function createListing(formData: FormData): Promise<Listing> {
+  const response = await api.post('/add_item', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+  return response.data;
+}
 

@@ -45,7 +45,7 @@ const OfferDialog = ({ product, open, onOpenChange, onSubmitOffer }: OfferDialog
         <DialogHeader>
           <DialogTitle>Make an Offer</DialogTitle>
           <DialogDescription>
-            Send an offer to {product.seller} for this item
+            Send an offer to {product.seller_id} for this item
           </DialogDescription>
         </DialogHeader>
         
@@ -53,11 +53,11 @@ const OfferDialog = ({ product, open, onOpenChange, onSubmitOffer }: OfferDialog
           <div className="flex items-start gap-4">
             <img
               src={product.image}
-              alt={product.title}
+              alt={product.name}
               className="w-24 h-24 object-cover rounded-lg border border-border"
             />
             <div className="flex-1">
-              <h4 className="font-semibold text-foreground">{product.title}</h4>
+              <h4 className="font-semibold text-foreground">{product.name}</h4>
               <p className="text-sm text-muted-foreground mt-1">
                 Listed at ${product.price.toFixed(2)}
               </p>
