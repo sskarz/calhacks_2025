@@ -147,6 +147,78 @@ class SendMessageRequest(BaseModel):
 
 # ============ BUYER ENDPOINTS ============
 
+
+async def contact_agent(message: str):
+        prompt = f"You received a new message regarding a negotiation. {message}"
+
+        print(f"Invoking agent with prompt: {prompt}")
+
+        # Import ADK components
+        from google.adk.runners import Runner
+        from google.adk.sessions.in_memory_session_service import InMemorySessionService
+        from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
+        from google.genai import types
+        import os
+
+        # Add specialty_agents to path if needed
+        current_file = os.path.abspath(__file__)
+        calhacks_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file)))
+        specialty_agents_path = os.path.join(calhacks_root, 'specialty_agents')
+        
+        print(f"Current file: {current_file}")
+        print(f"Specialty agents path: {specialty_agents_path}")
+        print(f"Path exists: {os.path.exists(specialty_agents_path)}")
+        
+        if specialty_agents_path not in sys.path:
+            sys.path.insert(0, specialty_agents_path)
+
+        # Import the orchestrator agent
+        from tetsy_agent.agent import root_agent
+        print("Successfully imported tetsy_agent")
+
+        # Create runner
+        runner = Runner(
+            app_name="tetsy_agent",
+            agent=root_agent,
+            session_service=InMemorySessionService(),
+            memory_service=InMemoryMemoryService(),
+        )
+
+        # Create session
+        session = await runner.session_service.create_session(
+            app_name="tetsy_agent",
+            user_id="buyer",
+            state={}
+        )
+
+        # Create message content
+        content = types.Content(
+            role='user',
+            parts=[types.Part.from_text(text=prompt)]
+        )
+
+        # Run the agent and collect responses
+        response_text = ""
+        async for event in runner.run_async(
+            user_id=session.user_id,
+            session_id=session.id,
+            new_message=content
+        ):
+            if event.content:
+                # Collect text from response parts
+                for part in event.content.parts:
+                    if part.text:
+                        response_text += part.text
+
+        print(f"Agent response: {response_text}")
+
+        return {
+            "message": "Listing created successfully via agent",
+            "status": "success",
+            "agent_response": response_text
+        }
+
+
 @app.get("/api/negotiations")
 async def get_negotiations():
     """Get all negotiations for the buyer."""
@@ -241,19 +313,13 @@ async def start_negotiation(request: StartNegotiationRequest):
         conn.commit()
         conn.close()
 
-        #call agent webhook
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                "http://localhost:10001/webhook/message",
-                json={
-                    "negotiation_id": negotiation_id,
-                    "sender_id": BUYER_ID,
-                    "content": request.message or f"I'd like to offer ${request.offer_amount:.2f} for this item.",
-                    "offer_amount": request.offer_amount
-                }
-            )
+        # Fire and forget - don't await
+        import asyncio
+        asyncio.create_task(contact_agent(request.message or f"I'd like to offer ${request.offer_amount:.2f} for this item."))
         
+        # Return response to client immediately
         return {"status": "success", "negotiation_id": negotiation_id}
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
