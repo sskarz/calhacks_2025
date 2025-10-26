@@ -6,8 +6,8 @@ import os
 # Load .env file
 load_dotenv()
 
-a2a_app = to_a2a(root_agent, port=10001)
+a2a_app = to_a2a(root_agent, port=80008)
 
 if __name__ == '__main__':
     import uvicorn
-    uvicorn.run(a2a_app, host='0.0.0.0', port=10001)
+    uvicorn.run(a2a_app, host='0.0.0.0', port=80008)
