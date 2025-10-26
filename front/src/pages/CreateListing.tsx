@@ -86,6 +86,7 @@ export default function CreateListing() {
       toast.loading("Orchestrator agent is processing your listing...", { id: "agent-listing" });
 
       // Call the orchestrator agent to create the listing
+      
       const agentResponse = await createListingWithAgent(
         {
           name: productDetails.name,

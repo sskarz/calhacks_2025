@@ -169,12 +169,30 @@ async def create_listing_with_agent(
     price: str = Form(...),
     quantity: str = Form(...),
     brand: str = Form(...),
-    platform: str = Form(...)
+    platform: str = Form(...),
+    image: UploadFile = File(...)
 ):
     """Create a listing using the orchestrator agent via Runner."""
     import json
     import sys
     import os
+
+    try:
+        # Read image as bytes
+        image_data = await image.read()
+
+        conn = db.get_db_connection()
+        db.add_item(
+            title=name,
+            description=description,
+            platform=platform,
+            price=price,
+            quantity=quantity,
+            imageSrc=image_data,
+            conn=conn
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     try:
         # Prepare product data
