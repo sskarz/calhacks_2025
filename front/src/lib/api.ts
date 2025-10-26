@@ -81,7 +81,8 @@ export async function createListingWithAgent(
     quantity: string;
     brand: string;
   },
-  platform: string
+  platform: string,
+  imageFile: File
 ): Promise<AgentListingResponse> {
   const formData = new FormData();
   formData.append('name', productData.name);
@@ -90,6 +91,7 @@ export async function createListingWithAgent(
   formData.append('quantity', productData.quantity);
   formData.append('brand', productData.brand);
   formData.append('platform', platform);
+  formData.append('image', imageFile); // Placeholder empty image
 
   const response = await api.post('/create-listing-with-agent', formData, {
     headers: {
