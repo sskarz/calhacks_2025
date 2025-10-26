@@ -28,9 +28,11 @@ IMPORTANT eBay API Requirements (learned from testing):
    - Error 25707 occurs if SKU contains invalid characters
 
 4. Product Specifics: Many categories require specific item attributes
-   - Category 31388 (Cameras & Photo) requires: brand, mpn, AND Model (via aspects)
+   - Category 31388 (Cameras & Photo) requires: Brand, Model, AND Type (via aspects)
+   - Note: Brand must be in BOTH the product.brand field AND aspects.Brand array
    - Error 25002 occurs if required product specifics are missing
-   - Use the "aspects" field to provide category-specific attributes like Model
+   - Use the "aspects" field to provide category-specific attributes
+   - Example Type values for cameras: "Digital Camera", "Action Camera", "DSLR", "Mirrorless Camera"
 
 5. Getting Offers: Query by SKU to avoid errors from old invalid SKUs
    - Use GET /offer?sku={sku} instead of GET /offer
@@ -231,6 +233,7 @@ async def root(
                 <button class="test-btn" onclick="runTest('/test-inventory-location')">Test Inventory Location</button>
                 <button class="test-btn" onclick="runTest('/test-create-listing')">Test Create Listing</button>
                 <button class="test-btn" onclick="runTest('/test-get-listing')">Test Get Listing</button>
+                <button class="test-btn" onclick="runTest('/test-publish-flow')">📤 Test Publish Endpoint Flow</button>
                 <button class="test-btn" onclick="runTest('/test-policies')">Test Policies</button>
                 <button class="test-btn" onclick="runTest('/test-inventory-operations')">Test Inventory Operations</button>
             </div>
@@ -695,7 +698,9 @@ async def test_all_endpoints():
                 "brand": "GoPro",
                 "mpn": "HERO4BLACK",  # Required: Manufacturer Part Number paired with brand
                 "aspects": {
-                    "Model": ["Hero 4 Black"]  # Required for category 31388 (Cameras & Photo)
+                    "Brand": ["GoPro"],  # Required: Brand as item specific
+                    "Model": ["Hero 4 Black"],  # Required for category 31388 (Cameras & Photo)
+                    "Type": ["Digital Camera"]  # Required: Camera type
                 }
             }
         }
@@ -1305,7 +1310,9 @@ async def test_inventory_operations():
                 "brand": "Generic",
                 "mpn": "TESTMPN001",
                 "aspects": {
-                    "Model": ["Test Model"]
+                    "Brand": ["Generic"],
+                    "Model": ["Test Model"],
+                    "Type": ["Digital Camera"]
                 }
             }
         }
@@ -1375,7 +1382,9 @@ async def test_create_listing():
                 "brand": "TestBrand",
                 "mpn": "QT12345",
                 "aspects": {
-                    "Model": ["Quick Test Model"]
+                    "Brand": ["TestBrand"],
+                    "Model": ["Quick Test Model"],
+                    "Type": ["Digital Camera"]
                 }
             }
         }
@@ -1475,6 +1484,252 @@ async def test_get_listing():
         return {"success": False, "error": str(e)}
 
 
+@app.get("/test-publish-flow")
+async def test_publish_flow():
+    """
+    Test the complete publish endpoint flow:
+    1. Create inventory item
+    2. Create offer with business policies
+    3. Publish offer
+    4. Return listing details and sandbox URL
+    """
+    test_sku = f"PUBTEST{int(time.time())}"
+
+    try:
+        headers = get_headers()
+        results = {
+            "test_name": "Publish Endpoint Flow Test",
+            "sku": test_sku,
+            "steps": []
+        }
+
+        # Step 1: Ensure inventory location exists
+        log_test("PUBLISH-1", "Ensuring inventory location exists")
+        location_result = await test_inventory_location()
+        results["steps"].append({
+            "step": 1,
+            "name": "Inventory Location",
+            "success": location_result.get("success", False),
+            "details": location_result
+        })
+
+        # Step 2: Get or create business policies
+        log_test("PUBLISH-2", "Getting/creating business policies")
+        fulfillment_policy_id = None
+        payment_policy_id = None
+        return_policy_id = None
+
+        # Get fulfillment policy
+        get_fulfillment_url = f"{SANDBOX_ACCOUNT_BASE}/fulfillment_policy?marketplace_id=EBAY_US"
+        fulfillment_response = requests.get(get_fulfillment_url, headers=headers)
+        if fulfillment_response.status_code == 200:
+            fulfillment_data = fulfillment_response.json()
+            if fulfillment_data.get("total", 0) > 0:
+                for policy in fulfillment_data.get("fulfillmentPolicies", []):
+                    if policy.get("shippingOptions") and len(policy["shippingOptions"]) > 0:
+                        fulfillment_policy_id = policy["fulfillmentPolicyId"]
+                        break
+
+        # Get payment policy
+        get_payment_url = f"{SANDBOX_ACCOUNT_BASE}/payment_policy?marketplace_id=EBAY_US"
+        payment_response = requests.get(get_payment_url, headers=headers)
+        if payment_response.status_code == 200:
+            payment_data = payment_response.json()
+            if payment_data.get("total", 0) > 0:
+                payment_policy_id = payment_data["paymentPolicies"][0]["paymentPolicyId"]
+
+        # Get return policy
+        get_return_url = f"{SANDBOX_ACCOUNT_BASE}/return_policy?marketplace_id=EBAY_US"
+        return_response = requests.get(get_return_url, headers=headers)
+        if return_response.status_code == 200:
+            return_data = return_response.json()
+            if return_data.get("total", 0) > 0:
+                return_policy_id = return_data["returnPolicies"][0]["returnPolicyId"]
+
+        policies_ready = fulfillment_policy_id and payment_policy_id and return_policy_id
+        results["steps"].append({
+            "step": 2,
+            "name": "Business Policies",
+            "success": policies_ready,
+            "details": {
+                "fulfillment_policy_id": fulfillment_policy_id,
+                "payment_policy_id": payment_policy_id,
+                "return_policy_id": return_policy_id,
+                "all_ready": policies_ready
+            }
+        })
+
+        if not policies_ready:
+            return {
+                "success": False,
+                "message": "Business policies are not ready. Please create them first.",
+                "hint": "Use the 'Create All Required Policies' button to set up business policies",
+                "results": results
+            }
+
+        # Step 3: Create inventory item
+        log_test("PUBLISH-3", f"Creating inventory item with SKU: {test_sku}")
+        inventory_payload = {
+            "availability": {
+                "shipToLocationAvailability": {
+                    "quantity": 10
+                }
+            },
+            "condition": "NEW",
+            "product": {
+                "title": "Publish Flow Test - GoPro Hero Camera",
+                "description": "Test listing for publish endpoint flow validation",
+                "imageUrls": [
+                    "https://i.ebayimg.com/images/g/T~0AAOSwf6RkP3aI/s-l1600.jpg"
+                ],
+                "brand": "GoPro",
+                "mpn": "PUBTEST001",
+                "aspects": {
+                    "Brand": ["GoPro"],
+                    "Model": ["Hero 4 Black"],
+                    "Type": ["Digital Camera"]
+                }
+            }
+        }
+
+        inventory_url = f"{SANDBOX_INVENTORY_BASE}/inventory_item/{test_sku}"
+        inventory_response = requests.put(inventory_url, headers=headers, json=inventory_payload)
+
+        inventory_success = inventory_response.status_code in [200, 201, 204]
+        results["steps"].append({
+            "step": 3,
+            "name": "Create Inventory Item",
+            "success": inventory_success,
+            "details": {
+                "status_code": inventory_response.status_code,
+                "error": inventory_response.text if not inventory_success else None
+            }
+        })
+
+        if not inventory_success:
+            return {
+                "success": False,
+                "message": "Failed to create inventory item",
+                "results": results
+            }
+
+        # Step 4: Create offer with business policies
+        log_test("PUBLISH-4", "Creating offer with business policies")
+        offer_payload = {
+            "sku": test_sku,
+            "marketplaceId": "EBAY_US",
+            "format": "FIXED_PRICE",
+            "listingDescription": "Test listing for publish endpoint flow",
+            "categoryId": "31388",  # Cameras & Photo
+            "merchantLocationKey": "default_location",
+            "listingDuration": "GTC",
+            "pricingSummary": {
+                "price": {
+                    "value": "349.99",
+                    "currency": "USD"
+                }
+            },
+            "listingPolicies": {
+                "fulfillmentPolicyId": fulfillment_policy_id,
+                "paymentPolicyId": payment_policy_id,
+                "returnPolicyId": return_policy_id
+            }
+        }
+
+        offer_url = f"{SANDBOX_INVENTORY_BASE}/offer"
+        offer_response = requests.post(offer_url, headers=headers, json=offer_payload)
+
+        offer_id = None
+        offer_success = offer_response.status_code in [200, 201]
+        if offer_success:
+            offer_data = offer_response.json()
+            offer_id = offer_data.get("offerId")
+
+        results["steps"].append({
+            "step": 4,
+            "name": "Create Offer",
+            "success": offer_success,
+            "details": {
+                "status_code": offer_response.status_code,
+                "offer_id": offer_id,
+                "error": offer_response.text if not offer_success else None
+            }
+        })
+
+        if not offer_success:
+            return {
+                "success": False,
+                "message": "Failed to create offer",
+                "results": results
+            }
+
+        # Step 5: Publish the offer
+        log_test("PUBLISH-5", f"Publishing offer: {offer_id}")
+        publish_url = f"{SANDBOX_INVENTORY_BASE}/offer/{offer_id}/publish"
+        publish_response = requests.post(publish_url, headers=headers)
+
+        listing_id = None
+        publish_success = publish_response.status_code == 200
+        if publish_success:
+            listing_data = publish_response.json()
+            listing_id = listing_data.get("listingId")
+
+            log_test("PUBLISH-5", f"Successfully published! Listing ID: {listing_id}", True)
+
+            results["steps"].append({
+                "step": 5,
+                "name": "Publish Offer",
+                "success": True,
+                "details": {
+                    "listing_id": listing_id,
+                    "sandbox_url": f"https://www.sandbox.ebay.com/itm/{listing_id}",
+                    "warnings": listing_data.get("warnings", [])
+                }
+            })
+        else:
+            log_test("PUBLISH-5", f"Failed to publish: {publish_response.text}", False)
+            results["steps"].append({
+                "step": 5,
+                "name": "Publish Offer",
+                "success": False,
+                "details": {
+                    "status_code": publish_response.status_code,
+                    "error": publish_response.text
+                }
+            })
+
+        # Final summary
+        all_success = all(step["success"] for step in results["steps"])
+        results["summary"] = {
+            "overall_success": all_success,
+            "total_steps": len(results["steps"]),
+            "successful_steps": sum(1 for step in results["steps"] if step["success"]),
+            "listing_id": listing_id,
+            "sandbox_url": f"https://www.sandbox.ebay.com/itm/{listing_id}" if listing_id else None,
+            "message": "Successfully published listing!" if all_success else "Publish flow failed"
+        }
+
+        return {
+            "success": all_success,
+            "results": results
+        }
+
+    except HTTPException as e:
+        return {
+            "success": False,
+            "error": "Authentication required",
+            "message": str(e.detail),
+            "hint": "Please visit /start-auth to authorize first"
+        }
+    except Exception as e:
+        log_test("PUBLISH-ERROR", f"Publish flow test failed: {str(e)}", False)
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "An unexpected error occurred during the publish flow test"
+        }
+
+
 @app.get("/get-all-published-listings")
 async def get_all_published_listings():
     """
@@ -1568,6 +1823,7 @@ if __name__ == "__main__":
     print("   POST /create-all-policies         - Create all required policies")
     print("   GET  /test-inventory-location     - Test location APIs")
     print("   GET  /test-create-listing         - Test listing creation")
+    print("   GET  /test-publish-flow           - Test publish endpoint flow")
     print("   GET  /test-get-listing            - Test listing retrieval")
     print("   GET  /test-policies               - Test policy APIs")
     print("   GET  /test-inventory-operations   - Test inventory CRUD")
