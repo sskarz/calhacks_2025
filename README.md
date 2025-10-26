@@ -1,6 +1,5 @@
-# calhacks_2025
 
-# CalHacks 2025 - AI-Powered Multi-Platform E-Commerce Listing System
+# CalHacks 2025 - ASAP: A2A-Powered Multi-Platform E-Commerce  System
 
 An intelligent e-commerce orchestration platform that uses Google ADK (Anthropic Developers Kit) agents to automatically create, manage, and negotiate product listings across multiple marketplaces (eBay and Tetsy).
 
