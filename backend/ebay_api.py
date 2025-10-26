@@ -46,7 +46,7 @@ import requests
 import secrets
 import time
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -1807,7 +1807,8 @@ async def publish_listing(
     price: float = Query(..., description="Price in USD"),
     quantity: int = Query(default=1, description="Available quantity"),
     brand: str = Query(default="Generic", description="Product brand"),
-    category_id: str = Query(default="31388", description="eBay category ID (default: Cameras & Photo)")
+    category_id: str = Query(default="31388", description="eBay category ID (default: Cameras & Photo)"),
+    image_url: str = Query(default="https://i.ebayimg.com/images/g/T~0AAOSwf6RkP3aI/s-l1600.jpg", description="Product image URL (must use HTTPS)")
 ):
     """
     Simplified endpoint to publish a listing to eBay.
@@ -1877,6 +1878,14 @@ async def publish_listing(
             }
 
         # Step 3: Create inventory item
+        # Validate image URL uses HTTPS
+        if not image_url.startswith("https://"):
+            return {
+                "success": False,
+                "error": "Invalid image URL",
+                "message": "Image URL must use HTTPS protocol. Self-hosted images must be served over HTTPS."
+            }
+
         inventory_payload = {
             "availability": {
                 "shipToLocationAvailability": {
@@ -1888,7 +1897,7 @@ async def publish_listing(
                 "title": name,
                 "description": description,
                 "imageUrls": [
-                    "https://i.ebayimg.com/images/g/T~0AAOSwf6RkP3aI/s-l1600.jpg"
+                    image_url
                 ],
                 "brand": brand,
                 "mpn": test_sku,
@@ -1970,8 +1979,10 @@ async def publish_listing(
         print(f"Title:       {name}")
         print(f"Price:       ${price}")
         print(f"Quantity:    {quantity}")
+        print(f"Brand:       {brand}")
         print(f"SKU:         {test_sku}")
         print(f"Listing ID:  {listing_id}")
+        print(f"Image:       {image_url}")
         print(f"Sandbox URL: {sandbox_url}")
         print(f"{'='*70}\n")
 
