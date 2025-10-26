@@ -9,7 +9,7 @@ import { Card } from "@/components/ui/card";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import type { Listing } from "@/types/listing";
-import { createListing, analyzeProductImage } from "@/lib/api";
+import { createListing, analyzeProductImage, createListingWithAgent } from "@/lib/api";
 
 const steps = [
   { number: 1, title: "Upload Image" },
@@ -83,22 +83,32 @@ export default function CreateListing() {
     }
 
     try {
-      const formData = new FormData();
-      formData.append('title', productDetails.name);
-      formData.append('description', productDetails.description);
-      formData.append('platform', selectedPlatform);
-      formData.append('price', productDetails.price.toString());
-      formData.append('status', 'draft');
-      formData.append('quantity', '1');
-      formData.append('image', imageFile);
+      toast.loading("Orchestrator agent is processing your listing...", { id: "agent-listing" });
 
-      await createListing(formData);
-      
-      toast.success("Listing created successfully!");
+      // Call the orchestrator agent to create the listing
+      const agentResponse = await createListingWithAgent(
+        {
+          name: productDetails.name,
+          description: productDetails.description,
+          price: productDetails.price,
+          quantity: productDetails.quantity,
+          brand: productDetails.brand,
+        },
+        selectedPlatform
+      );
+
+      console.log("Agent response:", agentResponse);
+
+      toast.success(
+        `Listing created successfully via ${selectedPlatform} agent! ${agentResponse.message}`,
+        { id: "agent-listing" }
+      );
+
       navigate("/");
-    } catch (error) {
-      toast.error("Failed to create listing");
-      console.error(error);
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || "Failed to create listing via agent";
+      toast.error(errorMessage, { id: "agent-listing" });
+      console.error("Agent error:", error);
     }
   };
 

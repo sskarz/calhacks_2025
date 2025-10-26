@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -162,6 +161,105 @@ async def websocket_endpoint(websocket: WebSocket):
         print(f"WebSocket error: {e}")
     finally:
         await websocket.close()
+
+@app.post("/api/create-listing-with-agent")
+async def create_listing_with_agent(
+    name: str = Form(...),
+    description: str = Form(...),
+    price: str = Form(...),
+    quantity: str = Form(...),
+    brand: str = Form(...),
+    platform: str = Form(...)
+):
+    """Create a listing using the orchestrator agent via Runner."""
+    import json
+    import sys
+    import os
+
+    try:
+        # Prepare product data
+        product_data = {
+            "name": name,
+            "description": description,
+            "price": price,
+            "quantity": quantity,
+            "brand": brand
+        }
+
+        # Construct prompt for the orchestrator agent
+        platform_name = "Tetsy" if platform.lower() == "tetsy" else "Ebay"
+        prompt = f"Please post this product to {platform_name}: {json.dumps(product_data, indent=2)}"
+
+        print(f"Invoking agent with prompt: {prompt}")
+
+        # Import ADK components
+        from google.adk.runners import Runner
+        from google.adk.sessions.in_memory_session_service import InMemorySessionService
+        from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
+        from google.genai import types
+
+        # Add specialty_agents to path if needed
+        specialty_agents_path = os.path.join(os.path.dirname(__file__), '..', 'specialty_agents')
+        if specialty_agents_path not in sys.path:
+            sys.path.insert(0, specialty_agents_path)
+
+        # Import the orchestrator agent
+        from my_agent.agent import root_agent
+
+        # Create runner
+        runner = Runner(
+            app_name="listing_orchestrator",
+            agent=root_agent,
+            session_service=InMemorySessionService(),
+            memory_service=InMemoryMemoryService(),
+        )
+
+        # Create session
+        session = await runner.session_service.create_session(
+            app_name="listing_orchestrator",
+            user_id="dashboard_user",
+            state={}
+        )
+
+        # Create message content
+        content = types.Content(
+            role='user',
+            parts=[types.Part.from_text(text=prompt)]
+        )
+
+        # Run the agent and collect responses
+        response_text = ""
+        async for event in runner.run_async(
+            user_id=session.user_id,
+            session_id=session.id,
+            new_message=content
+        ):
+            if event.content:
+                # Collect text from response parts
+                for part in event.content.parts:
+                    if part.text:
+                        response_text += part.text
+
+        print(f"Agent response: {response_text}")
+
+        return {
+            "message": "Listing created successfully via agent",
+            "status": "success",
+            "agent_response": response_text
+        }
+
+    except ImportError as e:
+        print(f"Import error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to import agent: {str(e)}. Make sure ADK is installed and agents are properly configured."
+        )
+    except Exception as e:
+        print(f"Error invoking agent: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error invoking agent: {str(e)}")
+
 
 @app.post("/api/add_item")
 async def add_item(
