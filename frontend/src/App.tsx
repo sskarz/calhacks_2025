@@ -191,7 +191,7 @@ function App() {
     };
   }, [items]);
 
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) {
       setFormState((prev) => ({ ...prev, imagePreview: null }));
@@ -203,6 +203,21 @@ function App() {
       ...prev,
       imagePreview: preview
     }));
+
+    // Call the process-image-upload endpoint
+    try {
+      const formData = new FormData();
+      formData.append("image", file);
+
+      await api.post("/process-image-upload", formData, {
+        headers: {
+          "Content-Type": "multipart/form-data"
+        }
+      });
+      console.log("Image uploaded successfully to backend");
+    } catch (error) {
+      console.error("Failed to upload image to backend:", error);
+    }
   };
 
   const resetForm = () => {
