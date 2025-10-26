@@ -23,9 +23,9 @@ An intelligent e-commerce orchestration platform that uses Google ADK (Anthropic
 ## Architecture Overview
 
 This project uses a multi-tier architecture with:
+- **Google ADK Multi-Agent System** (Gemini 2.5-Flash)
 - **React Frontend** (TypeScript, Tailwind CSS, Shadcn UI)
 - **FastAPI Backends** (Python, WebSocket support)
-- **Google ADK Multi-Agent System** (Gemini 2.5-Flash)
 - **SQLite Databases** (Listings and negotiations)
 - **Platform Integrations** (eBay Sandbox API, Tetsy API)
 
