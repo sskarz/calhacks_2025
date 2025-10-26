@@ -1,6 +1,7 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
+import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -24,6 +25,8 @@ const formSchema = z.object({
   name: z.string().min(3, "Name must be at least 3 characters"),
   price: z.string().min(1, "Price is required"),
   description: z.string().min(10, "Description must be at least 10 characters"),
+  quantity: z.string().min(1, "Quantity is required"),
+  brand: z.string().min(1, "Brand is required"),
   category: z.string().min(1, "Category is required"),
   condition: z.string().min(1, "Condition is required"),
 });
@@ -42,10 +45,19 @@ export const ProductDetailsForm = ({ onSubmit, initialData }: ProductDetailsForm
       name: "",
       price: "",
       description: "",
+      quantity: "",
+      brand: "",
       category: "",
       condition: "",
     },
   });
+
+  // Update form values when initialData changes
+  useEffect(() => {
+    if (initialData) {
+      form.reset(initialData);
+    }
+  }, [initialData, form]);
 
   return (
     <Form {...form}>
@@ -72,6 +84,34 @@ export const ProductDetailsForm = ({ onSubmit, initialData }: ProductDetailsForm
               <FormLabel>Price</FormLabel>
               <FormControl>
                 <Input type="number" step="0.01" placeholder="0.00" {...field} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="quantity"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Quantity</FormLabel>
+              <FormControl>
+                <Input type="number" placeholder="1" {...field} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
+          name="brand"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Brand</FormLabel>
+              <FormControl>
+                <Input placeholder="Enter brand name" {...field} />
               </FormControl>
               <FormMessage />
             </FormItem>

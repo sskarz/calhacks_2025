@@ -9,7 +9,7 @@ import { Card } from "@/components/ui/card";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import type { Listing } from "@/types/listing";
-import { createListing } from "@/lib/api"; // Adjust the import based on your project structure
+import { createListing, analyzeProductImage, createListingWithAgent } from "@/lib/api";
 
 const steps = [
   { number: 1, title: "Upload Image" },
@@ -24,19 +24,51 @@ export default function CreateListing() {
   const [imagePreview, setImagePreview] = useState<string>("");
   const [productDetails, setProductDetails] = useState<ProductDetails | null>(null);
   const [selectedPlatform, setSelectedPlatform] = useState<Platform | undefined>();
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  const handleImageSelect = (file: File) => {
+  const handleImageSelect = async (file: File) => {
     setImageFile(file);
     const reader = new FileReader();
     reader.onloadend = () => {
       setImagePreview(reader.result as string);
     };
     reader.readAsDataURL(file);
+
+    // Analyze the image with Gemini
+    setIsAnalyzing(true);
+    toast.loading("Analyzing product image...", { id: "image-analysis" });
+
+    try {
+      const analysis = await analyzeProductImage(file);
+
+      // Set initial product details with analyzed data
+      setProductDetails({
+        name: analysis.name,
+        description: analysis.description,
+        price: analysis.price,
+        quantity: analysis.quantity,
+        brand: analysis.brand,
+        category: "",
+        condition: "",
+      });
+
+      toast.success("Product details extracted! Review and edit as needed.", {
+        id: "image-analysis",
+      });
+    } catch (error) {
+      console.error("Error analyzing image:", error);
+      toast.error("Failed to analyze image. Please fill in details manually.", {
+        id: "image-analysis",
+      });
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   const handleRemoveImage = () => {
     setImageFile(null);
     setImagePreview("");
+    setProductDetails(null);
   };
 
   const handleProductDetailsSubmit = (data: ProductDetails) => {
@@ -51,22 +83,32 @@ export default function CreateListing() {
     }
 
     try {
-      const formData = new FormData();
-      formData.append('title', productDetails.name);
-      formData.append('description', productDetails.description);
-      formData.append('platform', selectedPlatform);
-      formData.append('price', productDetails.price.toString());
-      formData.append('status', 'draft');
-      formData.append('quantity', '1');
-      formData.append('image', imageFile);
+      toast.loading("Orchestrator agent is processing your listing...", { id: "agent-listing" });
 
-      await createListing(formData);
-      
-      toast.success("Listing created successfully!");
+      // Call the orchestrator agent to create the listing
+      const agentResponse = await createListingWithAgent(
+        {
+          name: productDetails.name,
+          description: productDetails.description,
+          price: productDetails.price,
+          quantity: productDetails.quantity,
+          brand: productDetails.brand,
+        },
+        selectedPlatform
+      );
+
+      console.log("Agent response:", agentResponse);
+
+      toast.success(
+        `Listing created successfully via ${selectedPlatform} agent! ${agentResponse.message}`,
+        { id: "agent-listing" }
+      );
+
       navigate("/");
-    } catch (error) {
-      toast.error("Failed to create listing");
-      console.error(error);
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || "Failed to create listing via agent";
+      toast.error(errorMessage, { id: "agent-listing" });
+      console.error("Agent error:", error);
     }
   };
 
@@ -109,10 +151,10 @@ export default function CreateListing() {
               <div className="flex justify-end">
                 <Button
                   onClick={() => setCurrentStep(2)}
-                  disabled={!imageFile}
+                  disabled={!imageFile || isAnalyzing}
                   size="lg"
                 >
-                  Next Step
+                  {isAnalyzing ? "Analyzing..." : "Next Step"}
                   <ArrowRight className="w-4 h-4 ml-2" />
                 </Button>
               </div>
@@ -124,7 +166,7 @@ export default function CreateListing() {
               <div>
                 <h2 className="text-2xl font-semibold mb-2">Product Details</h2>
                 <p className="text-muted-foreground">
-                  Tell us about your product
+                  {productDetails?.name ? "Review and edit the auto-filled details" : "Tell us about your product"}
                 </p>
               </div>
               <div className="max-w-2xl mx-auto">

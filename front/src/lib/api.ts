@@ -47,3 +47,55 @@ export async function createListing(formData: FormData): Promise<Listing> {
   return response.data;
 }
 
+export interface ProductAnalysis {
+  name: string;
+  description: string;
+  price: string;
+  quantity: string;
+  brand: string;
+}
+
+export async function analyzeProductImage(imageFile: File): Promise<ProductAnalysis> {
+  const formData = new FormData();
+  formData.append('image', imageFile);
+
+  const response = await api.post('/analyze-product-image', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+  return response.data;
+}
+
+export interface AgentListingResponse {
+  message: string;
+  status: string;
+  agent_response: any;
+}
+
+export async function createListingWithAgent(
+  productData: {
+    name: string;
+    description: string;
+    price: string;
+    quantity: string;
+    brand: string;
+  },
+  platform: string
+): Promise<AgentListingResponse> {
+  const formData = new FormData();
+  formData.append('name', productData.name);
+  formData.append('description', productData.description);
+  formData.append('price', productData.price);
+  formData.append('quantity', productData.quantity);
+  formData.append('brand', productData.brand);
+  formData.append('platform', platform);
+
+  const response = await api.post('/create-listing-with-agent', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+  return response.data;
+}
+
