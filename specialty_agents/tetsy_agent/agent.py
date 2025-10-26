@@ -13,14 +13,13 @@ async def post_listing_to_tetsy(name: str, description: str, price: float, image
         - image_url: URL or file path to the product image (optional)
     """
     import logging
-    import io
     logger = logging.getLogger(__name__)
 
     logger.info(f"Posting listing: name={name}, description={description}, price={price}, seller_id={seller_id}, image_url={image_url}")
 
     async with httpx.AsyncClient() as client:
         try:
-            # Step 1: Post to Tetsy external service
+            # Post to Tetsy external service
             # Build params dict
             params = {"name": name, "description": description, "price": str(price), "seller_id": seller_id}
             if image_url:
@@ -35,38 +34,10 @@ async def post_listing_to_tetsy(name: str, description: str, price: float, image
             response.raise_for_status()
             tetsy_result = response.json()
 
-            # Step 2: Save to local database
-            try:
-                # Create a placeholder image for database
-                placeholder_image = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82'
+            # Database is already saved by the backend endpoint before calling this agent
+            # No need to duplicate the database save here
 
-                files = {
-                    'image': ('placeholder.png', io.BytesIO(placeholder_image), 'image/png')
-                }
-                data = {
-                    'title': name,
-                    'description': description,
-                    'platform': 'Tetsy',
-                    'price': str(price),
-                    'status': 'active',
-                    'quantity': '1'
-                }
-
-                db_response = await client.post(
-                    "http://localhost:8000/api/add_item",
-                    data=data,
-                    files=files
-                )
-                logger.info(f"Database save status: {db_response.status_code}")
-                if db_response.status_code == 200:
-                    logger.info("Successfully saved to database")
-                else:
-                    logger.warning(f"Database save failed: {db_response.text}")
-            except Exception as db_error:
-                logger.error(f"Error saving to database: {db_error}")
-                # Don't fail the whole operation if database save fails
-
-            return f"Successfully posted listing: {tetsy_result}"
+            return f"Successfully posted listing to Tetsy: {tetsy_result}"
         except Exception as e:
             logger.error(f"Error posting listing: {e}")
             raise
