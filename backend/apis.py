@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -56,10 +57,48 @@ async def health_check():
 
 @app.post("/api/process-image-upload")
 async def process_image_upload(image: UploadFile = File(...)):
-    """Process image upload from step 1"""
+    """Process image upload from step 1 - forwards to agent"""
     print(f"Image uploaded: {image.filename}")
     print(f"Content type: {image.content_type}")
-    return {"message": "Image received", "filename": image.filename}
+
+    try:
+        # Read the image data
+        image_data = await image.read()
+
+        # Reset file pointer for potential reuse
+        await image.seek(0)
+
+        # Forward to the agent endpoint
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            files = {"file": (image.filename, image_data, image.content_type)}
+            data = {"user_query": "Describe this image and extract product details."}
+
+            response = await client.post(
+                "http://localhost:8002/process_image_upload",
+                files=files,
+                data=data
+            )
+
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Agent processing failed: {response.text}"
+                )
+
+            agent_response = response.json()
+            print(f"Agent response: {agent_response}")
+            return agent_response
+
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=503,
+            detail="Agent service unavailable. Make sure my_agent is running on port 8002."
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing image: {str(e)}"
+        )
 
 
 # Frontend Endpoints
