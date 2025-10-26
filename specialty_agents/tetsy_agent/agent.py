@@ -25,6 +25,7 @@ async def post_listing_to_tetsy(name: str, description: str, price: float, image
 
     async with httpx.AsyncClient() as client:
         try:
+            # Call the agent-specific endpoint with JSON body
             response = await client.post(
                 "http://localhost:8050/api/agent/listings",
                 json={
@@ -42,7 +43,7 @@ async def post_listing_to_tetsy(name: str, description: str, price: float, image
             logger.error(f"Error posting listing: {e}")
             raise
 
-async def respond_to_negotiation(negotiation_id: str, response_type: str, seller_id: str = "Tetsy", counter_offer: Optional[float] = None) -> str:
+async def respond_to_negotiation(negotiation_id: str, response_type: str, seller_id: str = "Tetsy", counter_offer: Optional[float] = None, message: Optional[str] = None) -> str:
     """Respond to a buyer's negotiation offer.
     
     DECISION LOGIC:
@@ -55,6 +56,7 @@ async def respond_to_negotiation(negotiation_id: str, response_type: str, seller
         response_type: One of 'accept', 'reject', or 'counter'
         seller_id: The seller ID (defaults to 'Tetsy')
         counter_offer: Required if response_type is 'counter' - the counter-offer amount
+        message: Optional message to include with the response
     
     Returns:
         Confirmation of the response sent
@@ -69,7 +71,7 @@ async def respond_to_negotiation(negotiation_id: str, response_type: str, seller
                     endpoint,
                     json={
                         "action": "accept",
-                        "message": "Great! I accept your offer. Let's complete the transaction."
+                        "message": message or "Great! I accept your offer. Let's complete the transaction."
                     }
                 )
             elif response_type == "reject":
@@ -78,7 +80,7 @@ async def respond_to_negotiation(negotiation_id: str, response_type: str, seller
                     endpoint,
                     json={
                         "action": "reject",
-                        "message": "Thank you for your interest, but I cannot accept this offer."
+                        "message": message or "Thank you for your interest, but I cannot accept this offer."
                     }
                 )
             elif response_type == "counter":
@@ -90,7 +92,7 @@ async def respond_to_negotiation(negotiation_id: str, response_type: str, seller
                     json={
                         "action": "counter",
                         "counter_amount": counter_offer,
-                        "message": f"I appreciate your offer. I can do ${counter_offer:.2f}"
+                        "message": message or f"I appreciate your offer. I can do ${counter_offer:.2f}"
                     }
                 )
             else:
@@ -146,6 +148,12 @@ root_agent = Agent(
 YOUR RESPONSIBILITIES:
 1. Create new product listings when requested
 2. Respond to buyer negotiations intelligently
+3. ALWAYS use a tool to respond - do NOT just chat
+
+CRITICAL: You MUST call a tool for EVERY buyer message:
+- If buyer mentions a price/offer: use respond_to_negotiation tool
+- If buyer asks questions/general message: use respond_to_message tool
+- If creating a listing: use post_listing_to_tetsy tool
 
 NEGOTIATION STRATEGY:
 - Extract the asking price and buyer's offer from the context provided
@@ -154,19 +162,19 @@ NEGOTIATION STRATEGY:
 - REJECT: Only if the buyer is clearly unrealistic or disrespectful
 
 GUIDELINES:
+- ALWAYS use a tool - never just respond with text
 - Always be professional and courteous
 - Try to close the deal when possible
 - Provide clear reasoning for counter-offers
 - Don't negotiate below 80% of asking price
 - Respond promptly to messages
-- For general questions (not price), use respond_to_message tool
 
-Use the appropriate tool based on what's needed:
-- post_listing_to_tetsy: For creating new product listings
-- respond_to_negotiation: For responding to buyer price offers
-- respond_to_message: For answering questions about items
+TOOL USAGE (MANDATORY):
+1. For price offers: respond_to_negotiation(negotiation_id, response_type, counter_offer, message) - if there is a price offer prioritize this tool
+2. For questions: respond_to_message(negotiation_id, message)
+3. For new listings: post_listing_to_tetsy(name, description, price)
 
-Always extract the negotiation details (ID, asking price, offer amount) from the context to make informed decisions.''',
+You must call ONE of these tools with every buyer message - no exceptions.''',
     tools=[
         FunctionTool(post_listing_to_tetsy),
         FunctionTool(respond_to_negotiation),

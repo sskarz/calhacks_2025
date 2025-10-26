@@ -143,10 +143,17 @@ class SendMessageRequest(BaseModel):
     class Config:
         populate_by_name = True
 
+class CreateListingRequest(BaseModel):
+    name: str
+    description: str
+    price: float
+    seller_id: str
+    image_url: Optional[str] = None
+
 # ============ BUYER ENDPOINTS ============
 
 
-async def contact_agent(message: str, negotiation_id: str = None, product_price: float = None):
+async def contact_agent(message: str, negotiation_id: str = None, product_price: float = None, type: str = ""):
     """Contact the agent to handle a negotiation message.
     
     Args:
@@ -160,7 +167,8 @@ async def contact_agent(message: str, negotiation_id: str = None, product_price:
     context = f"""You received a new message regarding a negotiation.
 Negotiation ID: {negotiation_id or 'unknown'}
 Original Asking Price: {price_str}
-Buyer's Message: {message}"""
+Buyer's Message: {message}
+Type: {type if type else ''}"""
     
     print(f"Invoking agent with context: {context}")
 
@@ -404,19 +412,16 @@ async def send_message(negotiation_id: str, request: SendMessageRequest):
         
         conn.commit()
         
-        cursor = conn.cursor()
-        cursor.execute('SELECT price FROM listings WHERE id = ?', (request.product_id,))
-        product_price = cursor.fetchone()[0]
         conn.close()
 
         #call agent webhook
         import asyncio
-        message_text = request.message or f"I'd like to offer ${request.offer_amount:.2f} for this item."
+        message_text = request.content or f"I'd like to offer ${request.offer_amount:.2f} for this item."
         asyncio.create_task(
             contact_agent(
-                message=message_text,
-                negotiation_id=negotiation_id,
-                product_price=float(product_price)  # Use offer as reference
+                message=request.content,
+                negotiation_id=negotiation_id,  # Use offer as reference
+                type=request.type
             )
         )
         
@@ -472,6 +477,37 @@ async def create_listing(
     conn.close()
 
     return {"status": "success", "id": f"listing-{listing_id}"}
+
+@app.post("/api/agent/listings")
+async def agent_create_listing(request: CreateListingRequest):
+    """Create a new listing - called by the agent."""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        logger.info(f"Creating listing: name={request.name}, price={request.price}")
+        
+        # Insert listing into database (don't include image_url - it's not in schema)
+        cursor.execute('''
+            INSERT INTO listings 
+            (name, description, price, seller_id)
+            VALUES (?, ?, ?, ?)
+        ''', (
+            request.name,
+            request.description,
+            request.price,
+            request.seller_id or "Tetsy"
+        ))
+        
+        conn.commit()
+        listing_id = cursor.lastrowid
+        logger.info(f"Listing created successfully with ID: {listing_id}")
+        conn.close()
+        
+        return {"status": "success", "message": "Listing created", "listing_id": listing_id}
+    except Exception as e:
+        logger.error(f"Error creating listing: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.exception_handler(Exception)
 async def exception_handler(request, exc):
@@ -545,7 +581,7 @@ async def seller_respond_to_offer(
     negotiation_id: str,
     response: SellerOfferResponse
 ):
-    """Seller accepts, rejects, or counters an offer."""
+    """Seller accepts, rejects, counters, or sends a message."""
     try:
         conn = get_db()
         cursor = conn.cursor()
@@ -564,33 +600,35 @@ async def seller_respond_to_offer(
             status = "rejected"
         elif response.action == "counter":
             status = "counter"
+        elif response.action == "message":
+            status = "pending"  # Don't change status for messages
         else:
-            raise HTTPException(status_code=400, detail="Invalid action")
+            raise HTTPException(status_code=400, detail="Invalid action: accept, reject, counter, or message")
         
         cursor.execute(
             "UPDATE negotiations SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (status, negotiation_id)
         )
         
-        # If counter offer, add message and update amount
+        # Add message for all actions
+        cursor.execute('''
+            INSERT INTO messages 
+            (id, negotiation_id, sender_id, sender_type, content, type, offer_amount)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            f"msg-{int(datetime.now().timestamp() * 1000)}",
+            negotiation_id,
+            seller_id,
+            "seller",
+            response.message or f"I can do ${response.counter_amount:.2f}" if response.action == "counter" else "",
+            "counter_offer" if response.action == "counter" else "message",
+            response.counter_amount if response.action == "counter" else None
+        ))
+        
+        # If counter offer, update amount
         if response.action == "counter":
             if not response.counter_amount:
                 raise HTTPException(status_code=400, detail="counter_amount required for counter action")
-            
-            cursor.execute('''
-                INSERT INTO messages 
-                (id, negotiation_id, sender_id, sender_type, content, type, offer_amount)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                f"msg-{int(datetime.now().timestamp() * 1000)}",
-                negotiation_id,
-                seller_id,
-                "seller",
-                response.message or f"I can do ${response.counter_amount:.2f}",
-                "counter_offer",
-                response.counter_amount
-            ))
-            
             cursor.execute(
                 "UPDATE negotiations SET last_offer_amount = ? WHERE id = ?",
                 (response.counter_amount, negotiation_id)
@@ -601,6 +639,7 @@ async def seller_respond_to_offer(
         
         return {"status": "success", "negotiation_id": negotiation_id, "action": response.action}
     except Exception as e:
+        logger.error(f"Error in seller_respond_to_offer: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/seller/{seller_id}/negotiations/{negotiation_id}/message")
