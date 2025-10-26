@@ -1800,6 +1800,207 @@ async def get_all_published_listings():
         return {"success": False, "error": str(e)}
 
 
+@app.post("/publish")
+async def publish_listing(
+    name: str = Query(..., description="Product name/title"),
+    description: str = Query(..., description="Product description"),
+    price: float = Query(..., description="Price in USD"),
+    quantity: int = Query(default=1, description="Available quantity"),
+    brand: str = Query(default="Generic", description="Product brand"),
+    category_id: str = Query(default="31388", description="eBay category ID (default: Cameras & Photo)")
+):
+    """
+    Simplified endpoint to publish a listing to eBay.
+    This endpoint handles the complete flow: create inventory item, create offer, and publish.
+    """
+    test_sku = f"AGENT{int(time.time())}"
+
+    try:
+        headers = get_headers()
+
+        # Step 1: Ensure inventory location exists
+        location_payload = {
+            "location": {
+                "address": {
+                    "addressLine1": "123 Main Street",
+                    "city": "San Jose",
+                    "stateOrProvince": "CA",
+                    "postalCode": "95050",
+                    "country": "US"
+                }
+            },
+            "locationInstructions": "Items ship from this location",
+            "name": "Default Location",
+            "merchantLocationStatus": "ENABLED",
+            "locationTypes": ["WAREHOUSE"]
+        }
+        location_url = f"{SANDBOX_INVENTORY_BASE}/location/default_location"
+        requests.post(location_url, headers=headers, json=location_payload)
+
+        # Step 2: Get business policies (required for publishing)
+        fulfillment_policy_id = None
+        payment_policy_id = None
+        return_policy_id = None
+
+        # Get fulfillment policy
+        get_fulfillment_url = f"{SANDBOX_ACCOUNT_BASE}/fulfillment_policy?marketplace_id=EBAY_US"
+        fulfillment_response = requests.get(get_fulfillment_url, headers=headers)
+        if fulfillment_response.status_code == 200:
+            fulfillment_data = fulfillment_response.json()
+            if fulfillment_data.get("total", 0) > 0:
+                for policy in fulfillment_data.get("fulfillmentPolicies", []):
+                    if policy.get("shippingOptions") and len(policy["shippingOptions"]) > 0:
+                        fulfillment_policy_id = policy["fulfillmentPolicyId"]
+                        break
+
+        # Get payment policy
+        get_payment_url = f"{SANDBOX_ACCOUNT_BASE}/payment_policy?marketplace_id=EBAY_US"
+        payment_response = requests.get(get_payment_url, headers=headers)
+        if payment_response.status_code == 200:
+            payment_data = payment_response.json()
+            if payment_data.get("total", 0) > 0:
+                payment_policy_id = payment_data["paymentPolicies"][0]["paymentPolicyId"]
+
+        # Get return policy
+        get_return_url = f"{SANDBOX_ACCOUNT_BASE}/return_policy?marketplace_id=EBAY_US"
+        return_response = requests.get(get_return_url, headers=headers)
+        if return_response.status_code == 200:
+            return_data = return_response.json()
+            if return_data.get("total", 0) > 0:
+                return_policy_id = return_data["returnPolicies"][0]["returnPolicyId"]
+
+        if not (fulfillment_policy_id and payment_policy_id and return_policy_id):
+            return {
+                "success": False,
+                "error": "Business policies not configured",
+                "message": "Please run /create-all-policies endpoint first to set up required business policies"
+            }
+
+        # Step 3: Create inventory item
+        inventory_payload = {
+            "availability": {
+                "shipToLocationAvailability": {
+                    "quantity": quantity
+                }
+            },
+            "condition": "NEW",
+            "product": {
+                "title": name,
+                "description": description,
+                "imageUrls": [
+                    "https://i.ebayimg.com/images/g/T~0AAOSwf6RkP3aI/s-l1600.jpg"
+                ],
+                "brand": brand,
+                "mpn": test_sku,
+                "aspects": {
+                    "Brand": [brand],
+                    "Model": [name],
+                    "Type": ["Product"]
+                }
+            }
+        }
+
+        inventory_url = f"{SANDBOX_INVENTORY_BASE}/inventory_item/{test_sku}"
+        inventory_response = requests.put(inventory_url, headers=headers, json=inventory_payload)
+
+        if inventory_response.status_code not in [200, 201, 204]:
+            return {
+                "success": False,
+                "error": "Failed to create inventory item",
+                "details": inventory_response.text
+            }
+
+        # Step 4: Create offer with business policies
+        offer_payload = {
+            "sku": test_sku,
+            "marketplaceId": "EBAY_US",
+            "format": "FIXED_PRICE",
+            "listingDescription": description,
+            "categoryId": category_id,
+            "merchantLocationKey": "default_location",
+            "listingDuration": "GTC",
+            "pricingSummary": {
+                "price": {
+                    "value": str(price),
+                    "currency": "USD"
+                }
+            },
+            "listingPolicies": {
+                "fulfillmentPolicyId": fulfillment_policy_id,
+                "paymentPolicyId": payment_policy_id,
+                "returnPolicyId": return_policy_id
+            }
+        }
+
+        offer_url = f"{SANDBOX_INVENTORY_BASE}/offer"
+        offer_response = requests.post(offer_url, headers=headers, json=offer_payload)
+
+        if offer_response.status_code not in [200, 201]:
+            return {
+                "success": False,
+                "error": "Failed to create offer",
+                "details": offer_response.text
+            }
+
+        offer_data = offer_response.json()
+        offer_id = offer_data.get("offerId")
+
+        # Step 5: Publish the offer
+        publish_url = f"{SANDBOX_INVENTORY_BASE}/offer/{offer_id}/publish"
+        publish_response = requests.post(publish_url, headers=headers)
+
+        if publish_response.status_code != 200:
+            return {
+                "success": False,
+                "error": "Failed to publish offer",
+                "details": publish_response.text
+            }
+
+        listing_data = publish_response.json()
+        listing_id = listing_data.get("listingId")
+        sandbox_url = f"https://www.sandbox.ebay.com/itm/{listing_id}"
+
+        # Log the successful publish with clickable URL
+        log_test("PUBLISH", f"✅ Successfully published: {name}", True)
+        log_test("PUBLISH", f"📦 Listing ID: {listing_id}", True)
+        log_test("PUBLISH", f"🔗 Sandbox URL: {sandbox_url}", True)
+        print(f"\n{'='*70}")
+        print(f"✅ LISTING PUBLISHED SUCCESSFULLY!")
+        print(f"{'='*70}")
+        print(f"Title:       {name}")
+        print(f"Price:       ${price}")
+        print(f"Quantity:    {quantity}")
+        print(f"SKU:         {test_sku}")
+        print(f"Listing ID:  {listing_id}")
+        print(f"Sandbox URL: {sandbox_url}")
+        print(f"{'='*70}\n")
+
+        return {
+            "success": True,
+            "message": f"Successfully published listing: {name}",
+            "sku": test_sku,
+            "offer_id": offer_id,
+            "listing_id": listing_id,
+            "sandbox_url": sandbox_url,
+            "price": price,
+            "quantity": quantity
+        }
+
+    except HTTPException as e:
+        return {
+            "success": False,
+            "error": "Authentication required",
+            "message": str(e.detail),
+            "hint": "Please visit /start-auth to authorize first"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "An unexpected error occurred while publishing the listing"
+        }
+
+
 # ============================================================================
 # SERVER STARTUP
 # ============================================================================
@@ -1817,6 +2018,7 @@ if __name__ == "__main__":
     print("   5. Opt-in to Business Policies if needed")
     print("   6. Run comprehensive tests!")
     print("\n🧪 Test Endpoints:")
+    print("   POST /publish                     - Publish a listing (for agents)")
     print("   GET  /test-all                    - Run all tests")
     print("   GET  /check-optin-status          - Check Business Policies opt-in")
     print("   POST /optin-to-business-policies  - Opt-in to Business Policies")
@@ -1831,4 +2033,4 @@ if __name__ == "__main__":
     print("   Business Policies opt-in is REQUIRED to publish offers!")
     print("   Use /create-all-policies to create missing Payment Policy")
     print("\n" + "="*70 + "\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
