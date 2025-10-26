@@ -113,8 +113,6 @@ class SellerMessageRequest(BaseModel):
     counter_offer_amount: Optional[float] = None
 
 class SellerOfferResponse(BaseModel):
-    negotiation_id: str
-    seller_id: str
     action: str  # "accept" | "reject" | "counter"
     counter_amount: Optional[float] = None
     message: Optional[str] = None
@@ -148,31 +146,56 @@ class SendMessageRequest(BaseModel):
 # ============ BUYER ENDPOINTS ============
 
 
-async def contact_agent(message: str):
-        prompt = f"You received a new message regarding a negotiation. {message}"
+async def contact_agent(message: str, negotiation_id: str = None, product_price: float = None):
+    """Contact the agent to handle a negotiation message.
+    
+    Args:
+        message: The buyer's message or offer
+        negotiation_id: The negotiation ID (optional)
+        product_price: The original product price (optional)
+    """
+    
+    # Build context with negotiation details
+    price_str = f"${product_price:.2f}" if product_price else "unknown"
+    context = f"""You received a new message regarding a negotiation.
+Negotiation ID: {negotiation_id or 'unknown'}
+Original Asking Price: {price_str}
+Buyer's Message: {message}"""
+    
+    print(f"Invoking agent with context: {context}")
 
-        print(f"Invoking agent with prompt: {prompt}")
+    try:
+        # Load environment variables FIRST
+        from dotenv import load_dotenv
+        import os
+        
+        load_dotenv()
+        
+        # Get API key and set it BEFORE importing anything from google
+        api_key = os.getenv('GOOGLE_API_KEY')
+        if not api_key:
+            raise ValueError("GOOGLE_API_KEY not found in environment variables")
+        
+        print(f"API Key found: {api_key[:10]}...")
+        
+        # Set the environment variable for google.genai
+        os.environ['GOOGLE_API_KEY'] = api_key
 
-        # Import ADK components
+        # Import ADK components AFTER setting the key
         from google.adk.runners import Runner
         from google.adk.sessions.in_memory_session_service import InMemorySessionService
         from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
         from google.genai import types
-        import os
-
+        
         # Add specialty_agents to path if needed
         current_file = os.path.abspath(__file__)
         calhacks_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file)))
         specialty_agents_path = os.path.join(calhacks_root, 'specialty_agents')
         
-        print(f"Current file: {current_file}")
-        print(f"Specialty agents path: {specialty_agents_path}")
-        print(f"Path exists: {os.path.exists(specialty_agents_path)}")
-        
         if specialty_agents_path not in sys.path:
             sys.path.insert(0, specialty_agents_path)
 
-        # Import the orchestrator agent
+        # Import the orchestrator agent AFTER everything is set up
         from tetsy_agent.agent import root_agent
         print("Successfully imported tetsy_agent")
 
@@ -187,14 +210,14 @@ async def contact_agent(message: str):
         # Create session
         session = await runner.session_service.create_session(
             app_name="tetsy_agent",
-            user_id="buyer",
+            user_id="seller",
             state={}
         )
 
-        # Create message content
+        # Create message content with full context
         content = types.Content(
             role='user',
-            parts=[types.Part.from_text(text=prompt)]
+            parts=[types.Part.from_text(text=context)]
         )
 
         # Run the agent and collect responses
@@ -213,11 +236,20 @@ async def contact_agent(message: str):
         print(f"Agent response: {response_text}")
 
         return {
-            "message": "Listing created successfully via agent",
+            "message": "Negotiation handled successfully via agent",
             "status": "success",
             "agent_response": response_text
         }
-
+        
+    except Exception as e:
+        print(f"Error in contact_agent: {str(e)}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return {
+            "message": "Negotiation created",
+            "status": "success",
+            "agent_response": ""
+        }
 
 @app.get("/api/negotiations")
 async def get_negotiations():
@@ -311,11 +343,23 @@ async def start_negotiation(request: StartNegotiationRequest):
         ))
         
         conn.commit()
-        conn.close()
+     
 
-        # Fire and forget - don't await
+        #grab product price for context
+        cursor = conn.cursor()
+        cursor.execute('SELECT price FROM listings WHERE id = ?', (request.product_id,))
+        product_price = cursor.fetchone()[0]
+        conn.close()
+        # Fire and forget - pass negotiation context
         import asyncio
-        asyncio.create_task(contact_agent(request.message or f"I'd like to offer ${request.offer_amount:.2f} for this item."))
+        message_text = request.message or f"I'd like to offer ${request.offer_amount:.2f} for this item."
+        asyncio.create_task(
+            contact_agent(
+                message=message_text,
+                negotiation_id=negotiation_id,
+                product_price=float(product_price)  # Use offer as reference
+            )
+        )
         
         # Return response to client immediately
         return {"status": "success", "negotiation_id": negotiation_id}
@@ -359,19 +403,23 @@ async def send_message(negotiation_id: str, request: SendMessageRequest):
             )
         
         conn.commit()
+        
+        cursor = conn.cursor()
+        cursor.execute('SELECT price FROM listings WHERE id = ?', (request.product_id,))
+        product_price = cursor.fetchone()[0]
         conn.close()
 
         #call agent webhook
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                "http://localhost:10001/webhook/message",
-                json={
-                    "negotiation_id": negotiation_id,
-                    "sender_id": BUYER_ID,
-                    "content": request.content,
-                    "offer_amount": request.offer_amount
-                }
+        import asyncio
+        message_text = request.message or f"I'd like to offer ${request.offer_amount:.2f} for this item."
+        asyncio.create_task(
+            contact_agent(
+                message=message_text,
+                negotiation_id=negotiation_id,
+                product_price=float(product_price)  # Use offer as reference
             )
+        )
+        
         
         return {"status": "success"}
     except Exception as e:
@@ -509,13 +557,26 @@ async def seller_respond_to_offer(
         if not cursor.fetchone():
             raise HTTPException(status_code=403, detail="Not authorized")
         
-        status = response.action if response.action != "counter" else "counter"
+        # Set status based on action
+        if response.action == "accept":
+            status = "accepted"
+        elif response.action == "reject":
+            status = "rejected"
+        elif response.action == "counter":
+            status = "counter"
+        else:
+            raise HTTPException(status_code=400, detail="Invalid action")
+        
         cursor.execute(
             "UPDATE negotiations SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (status, negotiation_id)
         )
         
+        # If counter offer, add message and update amount
         if response.action == "counter":
+            if not response.counter_amount:
+                raise HTTPException(status_code=400, detail="counter_amount required for counter action")
+            
             cursor.execute('''
                 INSERT INTO messages 
                 (id, negotiation_id, sender_id, sender_type, content, type, offer_amount)
@@ -538,7 +599,7 @@ async def seller_respond_to_offer(
         conn.commit()
         conn.close()
         
-        return {"status": "success", "negotiation_id": negotiation_id}
+        return {"status": "success", "negotiation_id": negotiation_id, "action": response.action}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
